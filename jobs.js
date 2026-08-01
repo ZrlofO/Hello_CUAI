@@ -98,7 +98,9 @@ async function fetchPopularJobs() {
   try {
     const response = await fetch("/api/jobs/popular?limit=6");
     if (!response.ok) throw new Error("Popular jobs API unavailable");
-    const jobs = await response.json();
+    const payload = await response.json();
+    const jobs = Array.isArray(payload) ? payload : payload.jobs;
+    if (!Array.isArray(jobs)) throw new Error("Unexpected jobs API response");
     setCachedJobs(jobs);
     return jobs;
   } catch {
