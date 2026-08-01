@@ -282,6 +282,25 @@ function getConversationRoleClass(agentName) {
   return "support";
 }
 
+function getConversationToneClass(agentName) {
+  const role = getConversationRoleClass(agentName);
+  if (role === "leading") return "strategy";
+  if (role === "consult") return "decision";
+  return "expert";
+}
+
+function renderAgentConversationItem(item, index = 0) {
+  return `
+    <article class="dialogue-turn ${getConversationToneClass(item.from)}">
+      <span>${String(index + 1).padStart(2, "0")}</span>
+      <div>
+        <strong>${item.from} → ${item.to}</strong>
+        <p>${item.message}</p>
+      </div>
+    </article>
+  `;
+}
+
 function renderFeedbackLoop(loop) {
   if (!loop) return "";
   if (loop.error) {
@@ -318,16 +337,14 @@ function renderFeedbackLoop(loop) {
         </article>
       </div>
 
-      <div class="conversation-log">
-        <h5>Agent 대화 로그</h5>
-        ${(loop.conversationLog || []).map((item) => `
-          <article class="chat-row ${getConversationRoleClass(item.from)}">
-            <div class="chat-bubble">
-              <span>${item.from} → ${item.to}</span>
-              <p>${item.message}</p>
-            </div>
-          </article>
-        `).join("")}
+      <div class="conversation-log discussion-flow">
+        <div class="agent-header">
+          <span class="result-label">Agent Conversation</span>
+          <h4>Agent 대화 로그</h4>
+        </div>
+        <div class="discussion-flow-list">
+          ${(loop.conversationLog || []).map(renderAgentConversationItem).join("")}
+        </div>
       </div>
 
       <div class="activated-agents">
@@ -422,9 +439,12 @@ function renderStreamingShell() {
     <h3>Agent들이 대화하며 보완 방향을 만들고 있습니다.</h3>
     <p class="extract-meta" id="liveStatus">입력한 Metadata를 서버로 보내고 있습니다.</p>
     <div class="analysis-loading"><span></span><span></span><span></span></div>
-    <div class="feedback-loop live-feedback">
-      <div class="conversation-log live-chat" id="liveConversation">
-        <h5>Agent 실시간 대화</h5>
+    <div class="discussion-flow live-feedback">
+      <div class="agent-header">
+        <span class="result-label">Agent Conversation</span>
+        <h4>Agent 실시간 대화</h4>
+      </div>
+      <div class="discussion-flow-list live-chat" id="liveConversation">
       </div>
     </div>
   `;
@@ -434,10 +454,12 @@ function appendLiveConversation(message) {
   const container = document.querySelector("#liveConversation");
   if (!container || !message?.message) return;
   const row = document.createElement("article");
-  row.className = `chat-row ${getConversationRoleClass(message.from)}`;
+  const turnNumber = container.querySelectorAll(".dialogue-turn").length + 1;
+  row.className = `dialogue-turn ${getConversationToneClass(message.from)}`;
   row.innerHTML = `
-    <div class="chat-bubble">
-      <span>${escapeHtml(message.from)} → ${escapeHtml(message.to)}</span>
+    <span>${String(turnNumber).padStart(2, "0")}</span>
+    <div>
+      <strong>${escapeHtml(message.from)} → ${escapeHtml(message.to)}</strong>
       <p>${escapeHtml(message.message)}</p>
     </div>
   `;
