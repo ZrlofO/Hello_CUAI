@@ -154,6 +154,45 @@ function plainText(value) {
   return formatListItem(value);
 }
 
+
+function normalizeText(value) {
+  return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function getJobNoteFor(job, llmReport) {
+  const notes = llmReport?.jobFitNotes || [];
+  const jobTitle = normalizeText(job?.title);
+  return notes.find((note) => normalizeText(note.title) === jobTitle)
+    || notes.find((note) => jobTitle && normalizeText(note.title).includes(jobTitle.slice(0, 18)))
+    || null;
+}
+
+function getQuickStrengths(data) {
+  const llmStrengths = data.llmReport?.strengths || [];
+  if (llmStrengths.length) return llmStrengths;
+  const reportSummary = data.feedbackLoop?.leadingReport?.summary;
+  if (reportSummary) return [reportSummary];
+  return data.summary?.strengths || ["입력된 이력서에서 직무와 연결할 수 있는 강점을 정리 중입니다."];
+}
+
+function getQuickGaps(data) {
+  const llmGaps = data.llmReport?.evidenceGaps || [];
+  if (llmGaps.length) return llmGaps;
+  const priorityGaps = data.feedbackLoop?.consultResult?.priority_gaps || data.feedbackLoop?.leadingReport?.critical_gaps || [];
+  if (priorityGaps.length) return priorityGaps;
+  return data.summary?.gaps || ["목표 직무 기준으로 더 보완하면 좋은 경험을 정리 중입니다."];
+}
+
+function getQuickActions(data) {
+  const reportActions = data.llmReport?.recommendedActions || [];
+  if (reportActions.length) return reportActions.map((item) => item.title ? `${item.title}${item.why ? ` — ${item.why}` : ""}${item.timeEstimate ? ` (${item.timeEstimate})` : ""}` : item);
+  return data.feedbackLoop?.leadingReport?.next_actions || [];
+}
+
+function renderFullList(items) {
+  return renderCompactList(items || [], 99);
+}
+
 function renderSlideDeck(title, slides = []) {
   const safeSlides = slides.filter(Boolean);
   if (!safeSlides.length) return "";
@@ -724,16 +763,27 @@ function renderLoading() {
 function renderStreamingShell() {
   liveLaneState = {};
   resultCard.innerHTML = `
-    <span class="result-label">실시간 Agent Feedback Loop</span>
-    <h3>Agent들이 대화하며 보완 방향을 만들고 있습니다.</h3>
-    <p class="extract-meta" id="liveStatus">입력한 Metadata를 서버로 보내고 있습니다.</p>
-    <div class="analysis-loading"><span></span><span></span><span></span></div>
-    <div class="lane-conversations live-lanes">
-      <div class="agent-header">
-        <span class="result-label">Parallel Agent Lanes</span>
-        <h4>Consult Clone ↔ Supporting Agent 1:1 대화</h4>
-      </div>
-      <div class="lane-grid" id="liveLaneGrid"></div>
+    <div class="live-agent-shell">
+      <span class="result-label">실시간 Agent Feedback Loop</span>
+      <h3>Agent들이 대화하며 보완 방향을 만들고 있습니다.</h3>
+      <p class="extract-meta" id="liveStatus">입력한 Metadata를 서버로 보내고 있습니다.</p>
+      <div class="analysis-loading"><span></span><span></span><span></span></div>
+
+      <section class="live-chat-panel">
+        <div class="agent-header">
+          <span class="result-label">Agent Chat</span>
+          <h4>실시간 대화</h4>
+        </div>
+        <div class="live-chat-stream" id="liveGlobalChat"></div>
+      </section>
+
+      <section class="lane-conversations live-lanes">
+        <div class="agent-header">
+          <span class="result-label">Expert Lanes</span>
+          <h4>전문 Agent별 1:1 검토</h4>
+        </div>
+        <div class="lane-grid" id="liveLaneGrid"></div>
+      </section>
     </div>
   `;
 }
@@ -764,26 +814,35 @@ function ensureLiveLaneCard(meta = {}) {
   return [...grid.querySelectorAll("[data-lane-chat]")].find((item) => item.dataset.laneChat === key) || null;
 }
 
-function appendLiveConversation(message) {
-  const laneKey = message?.lane || message?.agent_key;
-  if (!laneKey) {
-    if (message?.from && message?.to) {
-      setLiveStatus(`${message.from} → ${message.to}: ${message.message}`);
-    }
-    return;
-  }
-  const container = ensureLiveLaneCard({ agentKey: laneKey });
-  if (!container || !message?.message) return;
+function createLiveBubble(message, index) {
   const row = document.createElement("article");
-  const turnNumber = container.querySelectorAll(".dialogue-turn").length + 1;
-  row.className = `dialogue-turn ${getConversationToneClass(message.from)}`;
+  row.className = `dialogue-turn ${getConversationToneClass(message?.from)}`;
   row.innerHTML = `
-    <span>${String(turnNumber).padStart(2, "0")}</span>
+    <span>${String(index).padStart(2, "0")}</span>
     <div>
-      <strong>${escapeHtml(message.from)} → ${escapeHtml(message.to)}</strong>
-      <p>${escapeHtml(message.message)}</p>
+      <strong>${escapeHtml(message?.from || "Agent")} → ${escapeHtml(message?.to || "System")}</strong>
+      <p>${escapeHtml(message?.message || "")}</p>
     </div>
   `;
+  return row;
+}
+
+function appendLiveConversation(message) {
+  if (!message?.message) return;
+  const globalChat = document.querySelector("#liveGlobalChat");
+  if (globalChat) {
+    const globalIndex = globalChat.querySelectorAll(".dialogue-turn").length + 1;
+    const globalRow = createLiveBubble(message, globalIndex);
+    globalChat.appendChild(globalRow);
+    globalRow.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  const laneKey = message?.lane || message?.agent_key;
+  if (!laneKey) return;
+  const container = ensureLiveLaneCard({ agentKey: laneKey, agentName: message.agentName || message.to });
+  if (!container) return;
+  const laneIndex = container.querySelectorAll(".dialogue-turn").length + 1;
+  const row = createLiveBubble(message, laneIndex);
   container.appendChild(row);
   row.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
@@ -951,31 +1010,41 @@ function renderAnalysis(data) {
   const summary = data.summary || {};
   const rankedJobs = data.rankedJobs || [];
   const topJob = rankedJobs[0];
-  const jobSlides = rankedJobs.slice(0, 10).map((job, index) => `
-    <span class="slide-kicker">추천 공고 ${index + 1}</span>
-    <div class="job-slide-top">
-      <h5>${job.title}</h5>
-      <span class="fit high">Fit ${job.fit}</span>
-    </div>
-    <p class="company">${job.company || ""}</p>
-    <p class="job-meta">${job.location || ""}${job.deadline ? " · " + job.deadline : ""}</p>
-    <div class="skill-row">${(job.skills || []).slice(0, 6).map((skill) => `<span>${skill}</span>`).join("")}</div>
-    <div class="slide-two-col">
-      <div><strong>추천 이유</strong>${renderCompactList(job.fitReasons || [], 3)}</div>
-      <div><strong>보완 포인트</strong>${renderCompactList(job.gaps || [], 2)}</div>
-    </div>
-    ${job.url ? `<a class="slide-link" href="${job.url}" target="_blank" rel="noopener noreferrer">공고 보기</a>` : ""}
-  `);
+  const llmReport = data.llmReport || {};
+  const quickStrengths = getQuickStrengths(data);
+  const quickGaps = getQuickGaps(data);
+  const quickActions = getQuickActions(data);
+  const activatedCount = data.feedbackLoop?.activatedAgents?.length || 0;
+  const jobSlides = rankedJobs.slice(0, 10).map((job, index) => {
+    const note = getJobNoteFor(job, llmReport);
+    const reasonItems = note?.fitReason ? [note.fitReason] : (job.fitReasons || []);
+    const riskItems = note?.risk ? [note.risk] : (job.gaps || []);
+    return `
+      <span class="slide-kicker">추천 공고 ${index + 1}</span>
+      <div class="job-slide-top">
+        <h5>${escapeHtml(job.title)}</h5>
+        <span class="fit high">Fit ${job.fit}</span>
+      </div>
+      <p class="company">${escapeHtml(job.company || "")}</p>
+      <p class="job-meta">${escapeHtml(job.location || "")}${job.deadline ? " · " + escapeHtml(job.deadline) : ""}</p>
+      <div class="skill-row">${(job.skills || []).slice(0, 5).map((skill) => `<span>${escapeHtml(skill)}</span>`).join("")}</div>
+      <div class="slide-two-col">
+        <div><strong>왜 추천하나요</strong>${renderFullList(reasonItems)}</div>
+        <div><strong>지원 전 보완할 점</strong>${renderFullList(riskItems)}</div>
+      </div>
+      ${job.url ? `<a class="slide-link" href="${escapeHtml(job.url)}" target="_blank" rel="noopener noreferrer">공고 보기</a>` : ""}
+    `;
+  });
 
   resultCard.innerHTML = `
     <div class="result-hero-summary">
       <span class="result-label">진단 결과</span>
-      <h3>${summary.targetRole || "목표 직무"} 기준으로 지원 전략을 정리했습니다.</h3>
-      <p>${topJob ? `가장 적합한 후보는 ${topJob.title}이며, 총 ${rankedJobs.length}개 공고를 비교했습니다.` : "이력서 내용을 바탕으로 강점과 보완 방향을 정리했습니다."}</p>
+      <h3>${escapeHtml(summary.targetRole || "목표 직무")} 기준으로 지원 전략을 정리했습니다.</h3>
+      <p>${escapeHtml(llmReport.headline || (topJob ? `가장 적합한 후보는 ${topJob.title}이며, 총 ${rankedJobs.length}개 공고를 비교했습니다.` : "이력서 내용을 바탕으로 강점과 보완 방향을 정리했습니다."))}</p>
       <div class="summary-grid compact-summary">
-        <div><strong>${summary.extractedCharacters || 0}</strong><span>분석 문자</span></div>
         <div><strong>${rankedJobs.length}</strong><span>비교 공고</span></div>
         <div><strong>${topJob?.fit || "-"}</strong><span>최고 Fit</span></div>
+        <div><strong>${activatedCount}</strong><span>검토 Agent</span></div>
       </div>
     </div>
 
@@ -983,14 +1052,22 @@ function renderAnalysis(data) {
       <article>
         <span>강점</span>
         <h4>앞에 배치할 내용</h4>
-        ${renderCompactList(summary.strengths || [], 3)}
+        ${renderCompactList(quickStrengths, 3)}
       </article>
       <article>
         <span>보완</span>
         <h4>더 준비하면 좋은 내용</h4>
-        ${renderCompactList(summary.gaps || [], 3)}
+        ${renderCompactList(quickGaps, 3)}
       </article>
     </div>
+
+    ${quickActions.length ? `
+      <div class="quick-action-card">
+        <span>다음 행동</span>
+        <h4>우선순위가 높은 실행 계획</h4>
+        ${renderFullList(quickActions)}
+      </div>
+    ` : ""}
 
     ${renderFeedbackLoop(data.feedbackLoop)}
     ${jobSlides.length ? renderSlideDeck("추천 채용공고", jobSlides) : ""}

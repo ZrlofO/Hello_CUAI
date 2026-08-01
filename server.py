@@ -1010,19 +1010,36 @@ def job_document(job):
     )
 
 
-def explain_job_fit(matched_phrases, missing_phrases, similarity):
-    reasons = []
-    if matched_phrases:
-        reasons.append(f"겹치는 핵심 표현: {', '.join(matched_phrases[:4])}")
-    if similarity > 0.18:
-        reasons.append("CV 전체 문맥과 공고 설명의 유사도가 높습니다.")
-    if not reasons:
-        reasons.append("공고와 직접 겹치는 표현이 적어 지원 문장 재구성이 필요합니다.")
+def clean_requirement_phrase(phrase):
+    text = re.sub(r"\s+", " ", str(phrase or "")).strip(" `·,-")
+    noisy_terms = ["서울", "경기", "부산", "강남구", "해운대구", "분당구", "정규직", "계약직", "인턴", "경력", "학력", "기간제", "무기계약직"]
+    if len(text) < 3 or any(term in text for term in noisy_terms):
+        return ""
+    return text
 
-    gaps = [f"공고에서 보이는 `{phrase}` 근거를 CV에서 더 명확히 보여주세요." for phrase in missing_phrases[:3]]
-    if not gaps:
-        gaps = ["성과 수치, 대표 프로젝트 링크, 본인 기여도를 더 선명하게 적으면 fit이 올라갑니다."]
-    return reasons, gaps
+
+def explain_job_fit(matched_phrases, missing_phrases, similarity, job=None):
+    job = job or {}
+    title = job.get("title", "해당 공고")
+    company = job.get("company", "회사")
+    matched = [clean_requirement_phrase(item) for item in matched_phrases]
+    missing = [clean_requirement_phrase(item) for item in missing_phrases]
+    matched = [item for item in matched if item][:4]
+    missing = [item for item in missing if item][:3]
+
+    reasons = []
+    if matched:
+        reasons.append(f"{company}의 {title}는 {', '.join(matched[:3])} 경험을 앞세워 연결할 수 있습니다.")
+    elif similarity > 0.18:
+        reasons.append(f"{company} 공고의 업무 방향과 CV의 전체 연구·프로젝트 맥락이 일부 맞닿아 있습니다.")
+    else:
+        reasons.append(f"{company} 공고는 현재 CV와 직접 겹치는 표현이 많지 않아, 지원한다면 직무 관련 경험을 선별해 재구성해야 합니다.")
+
+    gaps = []
+    if missing:
+        gaps.append(f"지원 전 {', '.join(missing[:2])}와 연결되는 프로젝트 결과·사용 도구·본인 기여를 한 문단으로 보강하세요.")
+    gaps.append("채용 담당자가 바로 확인할 수 있도록 대표 프로젝트 링크, 실험 지표, 역할 범위를 함께 정리하세요.")
+    return reasons[:2], gaps[:2]
 
 
 def rank_jobs_for_cv(cv_text, jobs, target_role):
@@ -1039,7 +1056,7 @@ def rank_jobs_for_cv(cv_text, jobs, target_role):
         overlap = len(matched_phrases) / max(len(job_phrases), 1)
         title_bonus = 0.12 if target_role and any(token in document.lower() for token in tokenize(target_role)) else 0
         score = round(min(98, max(45, 56 + similarity * 58 + overlap * 30 + title_bonus * 100)))
-        reasons, gaps = explain_job_fit(matched_phrases, missing_phrases, similarity)
+        reasons, gaps = explain_job_fit(matched_phrases, missing_phrases, similarity, job)
         ranked_job = dict(job)
         ranked_job["fit"] = score
         ranked_job["similarity"] = round(similarity, 3)
@@ -1055,14 +1072,23 @@ def rank_jobs_for_cv(cv_text, jobs, target_role):
 def build_cv_summary(cv_text, target_role):
     keyphrases = extract_keyphrases(cv_text, top_n=14)
     signals = evidence_signals(cv_text)
+    strength_items = []
+    if any(term in cv_text.lower() for term in ["publication", "accepted", "conference", "논문", "학회"]):
+        strength_items.append("논문·학회 성과를 통해 연구 역량을 외부 결과로 보여줄 수 있습니다.")
+    if any(term in cv_text.lower() for term in ["intern", "research intern", "인턴", "lab"]):
+        strength_items.append("연구실·인턴 경험을 목표 직무의 실무형 경험으로 연결할 수 있습니다.")
+    if any(term in cv_text.lower() for term in ["award", "scholarship", "수상", "장학"]):
+        strength_items.append("수상·장학 이력이 있어 성과를 검증받은 경험으로 제시할 수 있습니다.")
+    if not strength_items and keyphrases:
+        strength_items.append("입력된 경험에서 목표 직무와 연결할 수 있는 핵심 역량이 확인됩니다.")
 
     return {
         "targetRole": target_role or "목표 직무 미입력",
         "extractedCharacters": len(cv_text),
         "skills": keyphrases,
         "evidenceSignals": signals,
-        "strengths": [f"CV에서 자동 추출된 핵심 표현: {', '.join(keyphrases[:8])}"] if keyphrases else [],
-        "gaps": ["강점/보완점 판단은 Agent feedback loop에서 metadata와 retrieval source를 기준으로 산출합니다."],
+        "strengths": strength_items,
+        "gaps": ["대표 경험마다 본인 역할, 사용 기술, 결과 지표, 확인 가능한 링크를 더 선명하게 정리하면 좋습니다."],
     }
 
 
@@ -1291,13 +1317,13 @@ def call_openai_llm_report(cv_text, summary, ranked_jobs, agent):
         "Write concise Korean. Return JSON only."
     )
     user_prompt = {
-        "task": "Generate a commercial-quality CV-to-job fit report and action plan.",
+        "task": "Generate a commercial-quality CV-to-job fit report and action plan. Write like a real career consultant, not a keyword matcher. For each jobFitNotes item, explain why this specific company/job is worth considering and what the applicant should supplement before applying. If company culture/success-case evidence is not provided, say the recommendation is based on the posting only; do not pretend external evidence was read.",
         "output_schema": {
             "headline": "string",
             "cvSummary": "string",
             "strengths": ["string"],
             "evidenceGaps": ["string"],
-            "jobFitNotes": [{"title": "string", "fitReason": "string", "risk": "string"}],
+            "jobFitNotes": [{"title": "string", "fitReason": "specific Korean reason tied to company/job/posting/CV", "risk": "specific Korean preparation point before applying"}],
             "recommendedActions": [{"title": "string", "why": "string", "timeEstimate": "string"}],
             "weeklyPlan": ["string"],
             "profileUpdatePrompt": "string",

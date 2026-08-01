@@ -3093,3 +3093,117 @@ button:disabled {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* Result copy polish */
+.page-title p {
+  max-width: 860px;
+  white-space: nowrap;
+}
+
+.quick-action-card {
+  margin-top: 16px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: #ffffff;
+}
+
+.quick-action-card > span {
+  display: inline-flex;
+  margin-bottom: 8px;
+  color: var(--aqua);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.quick-action-card h4 {
+  margin: 0 0 10px;
+  color: var(--navy-950);
+  font-size: 20px;
+  letter-spacing: -0.035em;
+}
+
+.quick-action-card ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.quick-action-card li {
+  color: var(--body);
+  line-height: 1.65;
+}
+
+@media (max-width: 900px) {
+  .page-title p {
+    white-space: normal;
+  }
+}
+
+/* Live agent chat polish */
+.live-agent-shell {
+  display: grid;
+  gap: 16px;
+}
+
+.live-agent-shell > h3 {
+  margin: 6px 0 0;
+}
+
+.live-chat-panel,
+.lane-conversations.live-lanes {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: #ffffff;
+}
+
+.live-chat-stream {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  max-height: 430px;
+  overflow-y: auto;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid rgba(228, 231, 236, 0.85);
+  border-radius: 20px;
+  background: linear-gradient(180deg, #f8fafc, #ffffff);
+}
+
+.live-chat-stream .dialogue-turn {
+  grid-template-columns: 36px minmax(0, 1fr) !important;
+  gap: 10px;
+  min-width: 0;
+}
+
+.live-chat-stream .dialogue-turn > span,
+.lane-chat .dialogue-turn > span {
+  align-self: start;
+}
+
+.live-chat-stream .dialogue-turn > div,
+.lane-chat .dialogue-turn > div {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.live-chat-stream .dialogue-turn p,
+.lane-chat .dialogue-turn p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.live-chat-stream:empty::before {
+  content: "Agent 메시지를 기다리고 있습니다...";
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.live-lanes .agent-header h4,
+.live-chat-panel .agent-header h4 {
+  margin: 0;
+  font-size: 20px;
+}
