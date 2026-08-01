@@ -413,37 +413,46 @@ def fetch_work24_jobs(limit):
 
 
 SKILL_KEYWORDS = {
+    "AI Research": ["artificial intelligence", "ai", "machine learning", "deep learning", "research"],
+    "Vision-Language Models": ["vision-language", "vision language", "vlm", "lvlm", "multimodal"],
+    "Computer Vision": ["computer vision", "perception", "segmentation", "3d", "bev"],
+    "Model Compression": ["pruning", "distillation", "efficient", "token pruning", "compression"],
     "Python": ["python", "파이썬"],
     "SQL": ["sql", "데이터베이스", "database"],
     "React": ["react", "프론트엔드", "frontend"],
-    "TypeScript": ["typescript", "ts"],
-    "LLM": ["llm", "gpt", "agent", "에이전트", "생성형"],
+    "TypeScript": ["typescript"],
+    "LLM": ["llm", "gpt", "agent", "rag", "에이전트", "생성형"],
     "머신러닝": ["머신러닝", "machine learning", "ml", "모델"],
     "딥러닝": ["딥러닝", "deep learning", "pytorch", "tensorflow"],
-    "API": ["api", "백엔드", "backend", "server", "서버"],
+    "Backend/API": ["api", "백엔드", "backend", "서버"],
     "기획": ["기획", "pm", "product", "프로덕트"],
-    "UX": ["ux", "사용자", "리서치", "research"],
-    "협업": ["협업", "팀", "리더", "운영", "communication"],
-    "오픈소스": ["오픈소스", "open source", "github", "pr"],
-    "해커톤": ["해커톤", "hackathon", "공모전", "수상"],
+    "UX": ["ux", "user experience", "사용자", "리서치"],
+    "Leadership": ["president", "leader", "leadership", "operating committee", "manager", "led", "운영", "리더"],
+    "Open Source": ["open-source", "open source", "opensource", "github", "오픈소스"],
+    "Hackathon": ["hackathon", "해커톤"],
+    "Publication": ["publication", "accepted", "conference", "paper", "manuscript", "proceedings", "논문"],
 }
 
 GAP_RECOMMENDATIONS = {
-    "Python": "Python 기반 데이터/AI 미니 프로젝트를 하나 더 배포하세요.",
+    "AI Research": "지원 공고의 세부 분야와 가장 가까운 연구/프로젝트 2개를 상단에 배치하세요.",
+    "Vision-Language Models": "VLM 관련 성과를 모델, 벤치마크, 지표 중심으로 더 압축해 보여주세요.",
+    "Computer Vision": "CV/Perception 프로젝트의 데이터셋과 성능 개선 수치를 명확히 적으세요.",
+    "Model Compression": "pruning/distillation 성과를 latency, FLOPs, accuracy trade-off로 정리하세요.",
+    "Python": "Python 기반 재현 코드나 GitHub 링크를 함께 제시하세요.",
     "SQL": "SQL 분석 과제나 대시보드 프로젝트로 데이터 근거를 보강하세요.",
     "React": "React로 배포된 포트폴리오 프로젝트 링크를 추가하세요.",
     "TypeScript": "TypeScript 리팩토링 경험을 README에 명확히 남기세요.",
-    "LLM": "LLM Agent 해커톤이나 RAG 프로젝트를 만들어보세요.",
+    "LLM": "LLM Agent/RAG 프로젝트에서 데이터, 평가, 실패 분석을 함께 보여주세요.",
     "머신러닝": "모델 학습/평가 지표가 포함된 프로젝트를 추가하세요.",
     "딥러닝": "PyTorch 기반 실험 로그와 결과 비교표를 CV에 연결하세요.",
-    "API": "API 설계/배포 경험을 보여주는 백엔드 프로젝트를 보강하세요.",
+    "Backend/API": "API 설계/배포 경험을 보여주는 백엔드 프로젝트를 보강하세요.",
     "기획": "문제정의-지표-실험 중심의 서비스 기획 사례를 정리하세요.",
     "UX": "사용자 인터뷰나 UT 결과가 담긴 케이스 스터디를 추가하세요.",
-    "협업": "팀 프로젝트에서 맡은 역할과 의사결정 근거를 더 구체화하세요.",
-    "오픈소스": "작은 오픈소스 PR 1개로 외부 협업 증거를 만드세요.",
-    "해커톤": "직무와 맞는 해커톤/공모전으로 외부 검증 이력을 확보하세요.",
+    "Leadership": "리더십 경험을 규모, 예산, 운영 성과 같은 수치로 표현하세요.",
+    "Open Source": "오픈소스 기여 링크와 본인의 contribution 범위를 명확히 적으세요.",
+    "Hackathon": "해커톤 결과물을 데모 링크나 수상/평가 기준과 함께 보여주세요.",
+    "Publication": "대표 논문 2~3개만 목표 직무와 연결해 요약하세요.",
 }
-
 
 def decode_pdf_literal(value):
     value = value.replace(r"\(", "(").replace(r"\)", ")").replace(r"\\", "\\")
@@ -543,6 +552,22 @@ def tokenize(text):
     return [token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9+#.]{1,}|[가-힣]{2,}", text)]
 
 
+def compact_text(text):
+    return re.sub(r"[^a-z0-9가-힣]+", "", text.lower())
+
+
+def keyword_matches(text, keyword):
+    lowered = text.lower()
+    normalized_keyword = keyword.lower()
+    compact = compact_text(text)
+    compact_keyword = compact_text(keyword)
+
+    if re.fullmatch(r"[a-z0-9+#.]{1,3}", normalized_keyword):
+        return re.search(rf"(?<![a-z0-9]){re.escape(normalized_keyword)}(?![a-z0-9])", lowered) is not None
+
+    return normalized_keyword in lowered or bool(compact_keyword and compact_keyword in compact)
+
+
 def vectorize(text):
     vector = {}
     for token in tokenize(text):
@@ -562,10 +587,9 @@ def cosine_similarity(left, right):
 
 
 def extract_profile_skills(text):
-    lowered = text.lower()
     skills = []
     for skill, keywords in SKILL_KEYWORDS.items():
-        if any(keyword.lower() in lowered for keyword in keywords):
+        if any(keyword_matches(text, keyword) for keyword in keywords):
             skills.append(skill)
     return skills
 
@@ -626,30 +650,46 @@ def rank_jobs_for_cv(cv_text, jobs, target_role):
 
 def build_cv_summary(cv_text, target_role):
     skills = extract_profile_skills(cv_text)
-    proof_terms = ["인턴", "수상", "공모전", "해커톤", "논문", "오픈소스", "배포", "github"]
+    proof_terms = [
+        "research intern", "intern", "accepted", "publication", "conference", "paper", "manuscript",
+        "award", "prize", "scholarship", "hackathon", "contest", "leaderboard", "논문", "수상", "인턴", "해커톤",
+    ]
+    project_terms = ["project", "research", "developed", "designed", "evaluated", "pipeline", "model", "프로젝트", "개발", "분석", "모델"]
     proof_count = count_keyword_hits(cv_text, proof_terms)
     strengths = []
     gaps = []
+
     if skills:
-        strengths.append(f"확인된 핵심 역량: {', '.join(skills[:6])}")
-    if count_keyword_hits(cv_text, ["프로젝트", "project", "개발", "분석", "모델"]):
-        strengths.append("프로젝트 기반 경험을 공고 요구역량과 연결할 수 있습니다.")
-    if proof_count < 2:
-        gaps.append("외부 검증 증거가 부족합니다. 해커톤, 오픈소스, 인턴, 수상 이력을 보강하세요.")
+        strengths.append(f"확인된 핵심 역량: {', '.join(skills[:8])}")
+    if count_keyword_hits(cv_text, ["research intern", "kaist", "lab", "advisor"]):
+        strengths.append("리서치 인턴 경험이 있어 AI 연구/개발 인턴 포지션에서 신뢰도가 높습니다.")
+    if count_keyword_hits(cv_text, ["accepted", "publication", "conference", "paper", "manuscript"]):
+        strengths.append("논문·학회 실적이 있어 연구 역량을 외부 결과로 증명하고 있습니다.")
+    if count_keyword_hits(cv_text, ["award", "prize", "scholarship", "leaderboard", "hackathon", "contest"]):
+        strengths.append("수상·장학·대회 성과가 있어 외부 검증 근거가 충분합니다.")
+    if count_keyword_hits(cv_text, project_terms):
+        strengths.append("프로젝트와 연구 경험을 공고 요구역량에 맞춰 재배치하기 좋습니다.")
+
+    if not count_keyword_hits(cv_text, ["github", "code", "repository", "demo", "deploy", "open source", "open-source"]):
+        gaps.append("연구 성과는 강하지만 코드/데모/GitHub 링크가 약하면 구현 역량 전달력이 떨어질 수 있습니다.")
+    if not count_keyword_hits(cv_text, ["latency", "throughput", "accuracy", "benchmark", "flops", "speed", "performance"]):
+        gaps.append("AI 인턴 지원에서는 성능 지표, latency, benchmark 같은 정량 결과를 더 앞에 배치하면 좋습니다.")
+    if not count_keyword_hits(cv_text, ["production", "service", "api", "deployment", "docker", "cloud"]):
+        gaps.append("산업체 개발 인턴을 노린다면 연구 외에 배포/서비스화 경험을 보강하면 fit이 올라갑니다.")
     if len(cv_text) < 500:
         gaps.append("CV 텍스트가 짧습니다. 성과 수치, 사용 기술, 결과 링크를 더 넣어야 정확도가 올라갑니다.")
+
     return {
         "targetRole": target_role or "목표 직무 미입력",
         "extractedCharacters": len(cv_text),
         "skills": skills,
         "strengths": strengths or ["목표 직무를 더 구체화하면 강점 포지셔닝이 선명해집니다."],
-        "gaps": gaps or ["기본 증거는 있습니다. 이제 공고별 요구 역량에 맞춰 문장을 재배치하세요."],
+        "gaps": gaps or ["외부 검증은 충분합니다. 이제 목표 공고별 요구 역량 순서에 맞춰 CV 문장을 재배치하세요."],
     }
 
 
 def count_keyword_hits(text, keywords):
-    lowered = text.lower()
-    return sum(1 for keyword in keywords if keyword.lower() in lowered)
+    return sum(1 for keyword in keywords if keyword_matches(text, keyword))
 
 
 def parse_analyze_request(headers, body):
