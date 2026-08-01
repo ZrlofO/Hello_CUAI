@@ -18,6 +18,8 @@ class WorkflowGraphState(TypedDict, total=False):
     user_confirmed_metadata: Optional[Dict[str, Any]]
     metadata_revision: int
     leading_agent: Dict[str, Any]
+    claims: List[Dict[str, Any]]
+    evidence_ledger: Dict[str, Any]
     errors: List[str]
     warnings: List[str]
     graph_error: Optional[str]

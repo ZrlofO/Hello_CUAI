@@ -100,5 +100,7 @@ class WorkflowState(BaseModel):
     interrupt_required: bool = False
     checkpointed: bool = False
     leading_agent: Dict[str, Any] = Field(default_factory=dict)
+    claims: List[Dict[str, Any]] = Field(default_factory=list)
+    evidence_ledger: Dict[str, Any] = Field(default_factory=lambda: {"claims": [], "evidence": [], "warnings": []})
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

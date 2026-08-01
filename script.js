@@ -17,6 +17,10 @@ const discussionPanel = document.querySelector("#discussionPanel");
 
 let workflow = null;
 
+function workflowPathId() {
+  return workflow && (workflow.workflow_id || workflow.request_id);
+}
+
 const categoryLabels = {
   activities_and_career_experience: "Activities and career experience",
   awards: "Awards",
@@ -159,7 +163,7 @@ async function updateItem(element) {
     return;
   }
   try {
-    const response = await fetch("/api/workflows/" + workflow.request_id + "/metadata/items/" + element.dataset.itemId, {
+    const response = await fetch("/api/workflows/" + workflowPathId() + "/metadata/items/" + element.dataset.itemId, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ base_revision: workflow.revision, normalized_value: value }),
@@ -175,7 +179,7 @@ async function updateItem(element) {
 async function deleteItem(element) {
   if (!window.confirm("이 metadata 항목을 삭제할까요?")) return;
   try {
-    const response = await fetch("/api/workflows/" + workflow.request_id + "/metadata/items/" + element.dataset.itemId, {
+    const response = await fetch("/api/workflows/" + workflowPathId() + "/metadata/items/" + element.dataset.itemId, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ base_revision: workflow.revision }),
@@ -193,7 +197,7 @@ async function addMetadataItem(event) {
   const value = newValue.value.trim();
   if (!value) return;
   try {
-    const response = await fetch("/api/workflows/" + workflow.request_id + "/metadata/items", {
+    const response = await fetch("/api/workflows/" + workflowPathId() + "/metadata/items", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -215,7 +219,7 @@ async function addMetadataItem(event) {
 async function confirmMetadata() {
   confirmButton.disabled = true;
   try {
-    const response = await fetch("/api/workflows/" + workflow.request_id + "/metadata/confirm", {
+    const response = await fetch("/api/workflows/" + workflowPathId() + "/metadata/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ base_revision: workflow.revision }),
@@ -223,7 +227,7 @@ async function confirmMetadata() {
     workflow = await readJson(response);
     setStatus("metadata 확정 완료", "확정된 프로필이 저장되었습니다. 다음 Phase에서 graph resume을 연결합니다.", false);
     confirmButton.textContent = "확정 완료";
-    const discussionResponse = await fetch("/api/workflows/" + workflow.request_id + "/discussion");
+    const discussionResponse = await fetch("/api/workflows/" + workflowPathId() + "/discussion");
     renderDiscussion(await readJson(discussionResponse));
   } catch (error) {
     setStatus("확정 실패", error.message, true);

@@ -21,6 +21,7 @@ from app.metadata.models import WorkflowState
 from app.agent_discussion import build_metadata_handoff_discussion
 from app.graph.runner import GraphExecutionTimeout, graph_snapshot, invoke_graph, resume_graph
 from app.metadata.models import NormalizedMetadata, RawExtraction, UserConfirmedMetadata
+from app.evidence.ledger import EvidenceLedger
 
 ROOT = Path(__file__).resolve().parent
 HOST = os.getenv("HOST", "0.0.0.0")
@@ -1261,6 +1262,11 @@ class RevisionConflict(ValueError):
 def get_workflow(workflow_id):
     workflow = _workflows.get(workflow_id)
     if workflow is None:
+        workflow = next(
+            (item for item in _workflows.values() if item.request_id == workflow_id),
+            None,
+        )
+    if workflow is None:
         try:
             snapshot = graph_snapshot(workflow_id)
             workflow = WorkflowState(
@@ -1281,6 +1287,8 @@ def get_workflow(workflow_id):
                 interrupt_required=snapshot.get("interrupt_required", False),
                 checkpointed=snapshot.get("checkpointed", True),
                 leading_agent=snapshot.get("leading_agent", {}),
+                claims=snapshot.get("claims", []),
+                evidence_ledger=snapshot.get("evidence_ledger", {"claims": [], "evidence": [], "warnings": []}),
             )
             _workflows[workflow_id] = workflow
         except Exception as exc:
@@ -1329,6 +1337,8 @@ def create_metadata_workflow(fields, files):
         next_nodes=graph_state.get("next_nodes", []),
         interrupt_required=graph_state.get("interrupt_required", False),
         checkpointed=graph_state.get("checkpointed", True),
+        claims=graph_state.get("claims", []),
+        evidence_ledger=graph_state.get("evidence_ledger", {"claims": [], "evidence": [], "warnings": []}),
     )
     _workflows[workflow.workflow_id] = workflow
     return workflow
@@ -1376,6 +1386,10 @@ def confirm_workflow_metadata(workflow, payload):
     workflow.interrupt_required = graph_state.get("interrupt_required", False)
     workflow.checkpointed = graph_state.get("checkpointed", True)
     workflow.leading_agent = graph_state.get("leading_agent", {})
+    workflow.claims = graph_state.get("claims", [])
+    workflow.evidence_ledger = graph_state.get("evidence_ledger", {"claims": [], "evidence": [], "warnings": []})
+    workflow.warnings = graph_state.get("warnings", workflow.warnings)
+    workflow.errors = graph_state.get("errors", workflow.errors)
     workflow.updated_at = datetime.now(timezone.utc)
     return workflow
 
@@ -1441,6 +1455,18 @@ class HICareerHandler(SimpleHTTPRequestHandler):
         if len(parts) == 4 and parts[0:2] == ["api", "workflows"] and parts[3] == "discussion":
             try:
                 self.send_json(build_metadata_handoff_discussion(get_workflow(parts[2])))
+            except KeyError as exc:
+                self.send_json({"error": str(exc)}, status=404)
+            return
+        if len(parts) == 4 and parts[0:2] == ["api", "workflows"] and parts[3] == "evidence":
+            try:
+                workflow = get_workflow(parts[2])
+                ledger = EvidenceLedger.model_validate(workflow.evidence_ledger)
+                validation = ledger.validate()
+                self.send_json({
+                    "ledger": ledger.model_dump(mode="json"),
+                    "validation": validation.model_dump(mode="json"),
+                })
             except KeyError as exc:
                 self.send_json({"error": str(exc)}, status=404)
             return

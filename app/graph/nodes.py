@@ -6,6 +6,8 @@ from pydantic import ValidationError
 
 from app.metadata.extraction import extract_pdf, normalize_extraction
 from app.metadata.models import NormalizedMetadata, RawExtraction
+from app.evidence.ledger import EvidenceLedger
+from app.evidence.models import Claim, ClaimType, ClaimVerdict
 
 from .state import WorkflowGraphState
 
@@ -88,6 +90,29 @@ def initialize_leading_agent(state: WorkflowGraphState) -> Dict[str, Any]:
             "errors": ["User-confirmed metadata is required before initialization"],
             "graph_error": "metadata_confirmation_required",
         }
+    ledger = EvidenceLedger.from_dict(state.get("evidence_ledger"))
+    confirmed_items = confirmed.get("items", [])
+    for item in confirmed_items:
+        provenance = item.get("provenance", "CV_EXTRACTED")
+        claim_type = {
+            "CV_EXTRACTED": ClaimType.EXTRACTED_CV_FACT,
+            "USER_CORRECTED": ClaimType.USER_CORRECTED_FACT,
+            "USER_PROVIDED": ClaimType.USER_FACT,
+        }.get(provenance, ClaimType.USER_FACT)
+        claim = Claim(
+            claim_text=item.get("normalized_value", ""),
+            claim_type=claim_type,
+            subject=item.get("category"),
+            predicate="has_profile_evidence",
+            object_or_value=item.get("normalized_value"),
+            produced_by="metadata_confirmation",
+            metadata_references=[item.get("item_id")],
+            external_verification_required=False,
+            current_verdict=ClaimVerdict.NOT_APPLICABLE,
+            confidence=item.get("extraction_confidence", 0.0),
+        )
+        ledger.add_claim(claim)
+    validation = ledger.validate()
     return {
         "status": "LEADING_AGENT_INITIALIZED",
         "leading_agent": {
@@ -95,4 +120,8 @@ def initialize_leading_agent(state: WorkflowGraphState) -> Dict[str, Any]:
             "status": "READY",
             "input": "USER_CONFIRMED_METADATA",
         },
+        "claims": [claim.model_dump(mode="json") for claim in ledger.claims],
+        "evidence_ledger": ledger.model_dump(mode="json"),
+        "warnings": validation.warnings,
+        "errors": validation.errors,
     }

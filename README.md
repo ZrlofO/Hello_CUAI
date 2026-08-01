@@ -198,6 +198,14 @@ The graph starts with validate_request, extract_pdf_text, normalize_metadata, me
 
 The SQLite file is stored under .data/workflows.db by default and is ignored by Git. Set LANGGRAPH_CHECKPOINT_DB to use a different path and LANGGRAPH_GRAPH_TIMEOUT_SECONDS to change the graph execution timeout.
 
+### Phase 3 claims and evidence ledger
+
+Phase 3 adds `app/evidence/models.py` and `app/evidence/ledger.py`. Confirmed metadata is converted into typed `user_fact` or `user_corrected_fact` claims when the graph resumes. External claims can be registered by later retrieval and agent nodes, but this phase does not perform web search or LLM verification.
+
+The ledger stores claim-level references rather than copied source summaries. A claim that requires external verification without evidence is deterministically marked `UNVERIFIABLE`; an approved claim without evidence is invalid. Evidence records include source URL, source type, publisher, publication and retrieval dates, active-status fields, excerpts, quality/freshness/relevance scores, verification status, retrieval query, and rejection reason.
+
+The read-only endpoint `GET /api/workflows/{workflow_id}/evidence` returns the current ledger and deterministic validation result. The response is compatible with the existing workflow response and does not create search results.
+
 The PDF extractor uses pypdf. It removes contact lines, section headings, standalone dates, and page markers from canonical items; meaningful lines are grouped under detected CV sections and retain both original_text and normalized_value for review-safe rephrasing. Image-only PDFs return a warning and require user-provided metadata because OCR is not included in this phase. The existing /api/extract-cv endpoint remains available as a compatibility adapter for the previous demo flow.
 
 ## Collaborator agent-discussion integration
