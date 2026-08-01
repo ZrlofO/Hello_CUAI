@@ -1,98 +1,232 @@
 # HICAREER
 
-HICAREER는 CV를 분석해 취업 준비생의 강점, 보완점, 추천 활동, 지원 기업 방향을 제안하는 한국어 AI 커리어 에이전트 웹사이트 프로토타입입니다.
+HICAREER is currently a repository-local MVP for CV/job-fit analysis and career-growth recommendations. The current implementation is a static frontend served by a small Python standard-library backend.
 
-## 핵심 컨셉
+The target LangGraph architecture is defined in MASTER_PLAN.md. LangGraph is not implemented in the current Phase 0 work.
 
-- CV 기반 강점·약점 진단
-- 봉사활동, 대외활동, 공모전 등 보완 활동 추천
-- 강점이 잘 드러나는 기업·산업군 추천
-- 네이비 패브릭 이미지에서 영감을 받은 프리미엄 컬러 테마
+## Current repository architecture
 
-## 실행
+### Frontend
 
-정적 파일만 확인하려면 브라우저에서 `index.html`을 열면 됩니다.
+The frontend uses static HTML, vanilla JavaScript, and CSS. There is no frontend framework or bundler.
 
-채용 공고 실시간 검색까지 함께 확인하려면 `python3 -m http.server`가 아니라 다음처럼 백엔드 서버로 실행해야 합니다.
+- index.html: landing page and popular-job search.
+- diagnosis.html: CV input and analysis entry point.
+- report.html: currently static sample report.
+- opportunities.html: currently static sample opportunity page.
+- plan.html: currently static sample growth-plan page.
+- styles.css: shared layout, forms, cards, loading, and responsive styles.
+- jobs.js: popular-job search, cache, filters, and job-card rendering.
+- script.js: CV upload, PDF extraction, manual form handling, analysis request, and result rendering.
 
-```bash
-cd /root/hicareer
-python3 -m pip install -r requirements.txt
-PORT=4173 python3 server.py
-```
+### Backend
 
-브라우저에서 `http://localhost:4173`으로 접속합니다.
+The backend is server.py using Python http.server.SimpleHTTPRequestHandler and ThreadingHTTPServer. It serves static files from the repository root and calls external services directly through Python standard-library HTTP utilities.
 
-## 채용 공고 연동 방향
+Current API routes:
 
-홈의 인기 채용 공고 섹션은 검색창 입력값으로 `/api/jobs/popular?limit=12&keyword=...`를 실시간 호출하고, 백엔드가 없거나 외부 사이트 요청이 실패하면 샘플 데이터로 표시됩니다.
-`server.py`는 기능 검증을 위해 사람인/잡코리아 검색 페이지를 서버에서 읽어오고, 실패 시 Work24 API 또는 샘플 데이터로 fallback합니다.
-실서비스에서는 각 서비스의 공식 API/제휴 방식과 이용약관을 확인한 뒤 서버 라우트에서 통합하는 구조를 권장합니다.
+| Method | Route | Current behavior |
+|---|---|---|
+| GET | /api/jobs/popular?limit=&keyword= | Retrieves jobs from configured sources and falls back to sample jobs |
+| POST | /api/extract-cv | Accepts a multipart PDF and uses OpenAI file input to map it to editable fields |
+| POST | /api/analyze-cv | Accepts JSON or multipart CV input, ranks jobs, creates heuristic agent data, and optionally creates an LLM report |
 
-권장 호출 전략:
+Current integrations are Work24, Saramin/JobKorea scraping, and the OpenAI Responses API.
 
-- 홈에서는 인기/최신 공고 6개만 조회
-- 동일 조건은 10분 캐싱
-- 상세 설명 전문보다 회사, 직무, 요구역량, 마감일, 링크만 사용
-- 진단 페이지에서는 목표 직무 기준 공고 5~10개만 분석
+## Running the current MVP
 
-### Work24 API 설정
+### Windows PowerShell
 
-1. Work24 OpenAPI에서 채용정보 API 인증키를 발급받습니다.
-2. `.env.example`을 참고해 `WORK24_AUTH_KEY` 환경변수를 설정합니다.
-3. `python3 server.py`로 실행하면 홈에서 `/api/jobs/popular`를 통해 공고를 불러옵니다.
+    python -m pip install -r requirements.txt
+    $env:PORT = "8080"
+    python server.py
 
-예시:
+Open http://localhost:8080/.
 
-```bash
-WORK24_AUTH_KEY=발급받은_키 python3 server.py
-```
+### macOS/Linux
 
-### 사람인/잡코리아 기능 검증 모드
+    python3 -m pip install -r requirements.txt
+    PORT=8080 python3 server.py
 
-`server.py`는 기본적으로 검색 키워드에 맞춰 사람인과 잡코리아 검색 결과를 먼저 시도합니다.
-사이트 HTML 구조 변경, 차단, 네트워크 실패가 발생하면 Work24 또는 샘플 데이터로 자동 대체됩니다.
+Open http://localhost:8080/.
 
-예시:
+The current requirements.txt does not install LangGraph. LangGraph must be evaluated and added only in a later implementation phase.
 
-```bash
-python3 server.py
-# http://localhost:8080/api/jobs/popular?limit=6&keyword=AI%20인턴
-```
+## Environment configuration
 
-## CV 분석 및 fit ranking MVP
+The available environment variables are:
 
-`/api/analyze-cv`는 질문형 입력 텍스트를 받아 현재 채용공고와 비교합니다. PDF는 먼저 `/api/extract-cv`에서 OpenAI file input으로 읽고, 입력칸별 bullet point로 정리한 뒤 사용자가 수정하는 흐름입니다.
+| Variable | Purpose | Required |
+|---|---|---|
+| HOST | HTTP bind address; defaults to 0.0.0.0 | No |
+| PORT | HTTP port; defaults to 8080 | No |
+| JOBS_CACHE_TTL_SECONDS | Popular-job cache duration; defaults to 600 | No |
+| WORK24_AUTH_KEY | Work24 API credential | No |
+| OPENAI_API_KEY | OpenAI Responses API credential | Required for current PDF extraction and LLM report |
+| OPENAI_MODEL | Current model configuration | No |
 
-동작 흐름:
+Real credentials must not be committed. The current implementation reads credentials from environment variables and has no secrets manager.
 
-1. PDF 업로드 시 OpenAI가 PDF 원본을 직접 읽어 질문 입력칸별 bullet point로 정리합니다.
-2. 사용자가 정리된 입력칸을 직접 수정합니다.
-3. 수정된 CV 텍스트와 공고 문서를 토큰 벡터로 변환합니다.
-4. cosine similarity와 기술스택 overlap을 합쳐 fit score를 계산합니다.
-5. 추천 이유, 부족한 증거, 보완 액션을 함께 반환합니다.
+## Current request and response behavior
 
-현재 PDF 정리는 `/api/extract-cv`에서 OpenAI file input을 사용합니다. 로컬 PDF 파서로 텍스트를 덤프하지 않고, LLM이 PDF 원본을 읽어 입력칸별 bullet point로 정리합니다.
+### Popular jobs
 
-PDF 정리 프롬프트는 few-shot 예시를 포함해 원문 OCR 덤프를 그대로 넣지 않고, 기관·역할·기술·성과·연도·순위·학회명을 보존한 한국어 bullet point로 재작성하도록 구성했습니다.
+The frontend calls:
 
-### 자동 핵심 표현 추출
+    GET /api/jobs/popular?limit=12&keyword=<encoded keyword>
 
-CV와 채용공고 ranking은 더 이상 미리 정한 기술 후보 목록에만 맞추지 않습니다.
-서버는 CV 텍스트와 공고 문서에서 n-gram 기반 핵심 표현을 자동 추출하고, 문서 유사도와 핵심 표현 overlap을 함께 사용해 fit score를 계산합니다.
-고정 키워드 사전은 공고 카드의 보조 분류/fallback에만 사용합니다.
+The response is a JSON array. Current job objects contain title, company, category, location, deadline, fit, skills, reason, url, and source.
 
+The backend attempts Work24, Saramin, and JobKorea retrieval depending on configuration and network availability. On failure it returns sample fallback data. Fallback data is demo data, not verified market evidence.
 
-## LLM 리포트 옵션
+### PDF extraction
 
-`OPENAI_API_KEY`를 설정하면 `/api/extract-cv`가 PDF 원본을 OpenAI file input으로 읽어 입력칸별 bullet point를 생성하고, `/api/analyze-cv`가 retrieval/ranking 결과를 OpenAI Responses API에 전달해 더 자연스러운 한국어 리포트를 생성합니다.
-분석 리포트는 키가 없거나 호출이 실패하면 기존 로컬 agent 리포트로 fallback하지만, PDF 자동 정리는 OpenAI API 키가 필요합니다.
+Request:
 
-```bash
-cd /root/hicareer
-export OPENAI_API_KEY="your_api_key_here"
-export OPENAI_MODEL="gpt-5.6-luna"
-PORT=4173 python3 server.py
-```
+    POST /api/extract-cv
+    Content-Type: multipart/form-data
 
-주의: API 키는 절대 GitHub에 커밋하지 마세요. 이미 채팅이나 로그에 노출된 키는 OpenAI dashboard에서 revoke/rotate하는 것을 권장합니다.
+Multipart fields:
+
+- cv_file: uploaded PDF.
+- target_role: optional target role.
+
+Current response fields include source, filename, pdf, text, and fields. The fields object contains targetRole, education, projects, work, activity, strength, extra, and rawSummary.
+
+This is a demo field mapper. It is not yet the provenance-aware canonical metadata model required by the product.
+
+### CV analysis
+
+Request:
+
+    POST /api/analyze-cv
+    Content-Type: application/json
+
+Example input:
+
+    {"target_role":"AI Engineer","cv_text":"Python project experience"}
+
+The endpoint also accepts multipart input with a CV file and target_role.
+
+The response includes source, filename, summary, rankedJobs, agent, and llmReport. The current implementation uses heuristic phrase overlap, cosine similarity, scraped/fallback jobs, and an optional single LLM report.
+
+It does not yet provide workflow IDs, LangGraph state, checkpointing, metadata-review interrupts, claim IDs, evidence IDs, Judge verification, adaptive debate, readiness policy, Planner state, calendar proposals, or protected user-confirmed metadata.
+
+## Phase 0 verification results
+
+The following checks were run:
+
+- python -m py_compile server.py: passed.
+- Static root request: HTTP 200.
+- GET /api/jobs/popular?limit=1&keyword=AI: HTTP 200.
+- POST /api/analyze-cv with minimal JSON input: HTTP 200.
+- Main source files were readable as UTF-8.
+- No UTF-8 replacement characters were found.
+- Mojibake-like strings were found in server.py, script.js, jobs.js, HTML files, and README.md.
+
+The encoding issue should be investigated before changing user-facing Korean copy. It may be an earlier text conversion problem rather than a runtime UTF-8 failure.
+
+## Reuse and migration map
+
+### Reuse
+
+- Existing static page structure and startup command.
+- Navigation and shared visual conventions.
+- PDF upload control.
+- Job cards, filters, cache behavior, and loading states.
+- Existing multipart parsing as an interim compatibility mechanism.
+- Existing job adapters as retrieval-provider candidates.
+- Existing environment-variable configuration pattern.
+
+### Modify
+
+- diagnosis.html: add preparation period and metadata review/confirmation.
+- script.js: replace one-shot analysis with workflow status, metadata mutations, and resume.
+- report.html: render live report sections and citations.
+- opportunities.html: render evidence-backed opportunities and freshness/status.
+- plan.html: render Planner Todo and calendar proposals.
+- jobs.js: retain filtering/cache behavior and add source/verification status.
+- styles.css: add metadata editor, progress, warning, citation, and provenance styles.
+- server.py: retain compatibility routes while delegating workflow logic to modular services.
+
+### Demo-only or deprecated behavior
+
+- Static sample report, opportunity, and plan content.
+- Manual CV entry as a primary replacement for PDF.
+- Free-form PDF bullet mapping as canonical metadata.
+- Single unrestricted LLM report generation.
+- Simple similarity score as a factual readiness decision.
+- Fallback jobs displayed without an explicit fallback label.
+
+## Current limitations and risks
+
+1. The current backend is a monolithic standard-library HTTP handler.
+2. LangGraph and checkpoint persistence are not installed.
+3. PDF extraction does not preserve robust page/location provenance.
+4. Current metadata is editable text blocks rather than structured item records.
+5. There is no graph interrupt or human-in-the-loop persistence.
+6. There is no claim-level evidence verification.
+7. Search and scraping are network-sensitive and provider-specific.
+8. Fallback jobs may be mistaken for live evidence unless clearly labeled.
+9. LLM JSON output is not governed by the final Judge contract.
+10. Frontend HTML interpolation requires safe rendering before displaying external content.
+11. There is no persistent workflow state, resumability, or background execution.
+12. Google Calendar integration does not exist.
+13. CV retention, deletion, and logging-redaction policies are not implemented.
+14. Korean text encoding requires a dedicated verification or migration decision.
+
+## Phase 1 metadata workflow
+
+Phase 1 adds a PDF-to-metadata review workflow without adding LangGraph or downstream agents.
+
+New endpoints:
+
+| Method | Route | Purpose |
+|---|---|---|
+| POST | /api/workflows | Validate a PDF, extract text, normalize metadata, and return a review-required workflow |
+| GET | /api/workflows/{id} | Return the current workflow and metadata state |
+| PATCH | /api/workflows/{id}/metadata/items/{item_id} | Update one unconfirmed metadata item |
+| DELETE | /api/workflows/{id}/metadata/items/{item_id} | Delete one unconfirmed metadata item |
+| POST | /api/workflows/{id}/metadata/items | Add user-provided metadata |
+| POST | /api/workflows/{id}/metadata/confirm | Confirm the current metadata revision |
+
+The workflow response contains raw extraction information, normalized metadata, provenance, extraction confidence, warnings, revision, and (after confirmation) user-confirmed metadata.
+
+Phase 1 uses an in-memory workflow store. It supports revision checks and HTTP 409 conflicts, but it is not durable across process restarts. Durable LangGraph checkpointing is intentionally deferred to Phase 2.
+
+The PDF extractor uses pypdf. Image-only PDFs return a warning and require user-provided metadata because OCR is not included in this phase. The existing /api/extract-cv endpoint remains available as a compatibility adapter for the previous demo flow.
+
+## Collaborator agent-discussion integration
+
+The latest origin/main contains four collaborator commits adding a multi-agent discussion presentation to the older diagnosis and analysis flow:
+
+- 722eda9 Add multi-agent career discussion flow
+- c6ec3fa Expand job ranking and review sources
+- f24758d Make agent discussion conversational
+- a721a4b Refocus agents on spec-building discussion
+
+Those commits were fetched for inspection but were not merged wholesale because they modify the same files as the Phase 1 metadata workflow and assume the previous manual-input/analyze-cv page flow. They also include generated market and review messages that are not yet backed by the Phase 1 Evidence Ledger.
+
+The compatible portion is integrated as a Phase 1 handoff panel:
+
+- GET /api/workflows/{id}/discussion returns a typed discussionHistory contract.
+- The panel appears after metadata confirmation.
+- Leading Agent 1 reports the confirmed metadata handoff.
+- Leading Agent 2 and Supporting Agents remain PENDING until later graph phases provide verified market evidence and gap selection.
+- Each displayed event includes status, timestamp, and metadata evidence references where applicable.
+- No external company, acceptance-case, deadline, or recommendation claim is generated by this Phase 1 panel.
+
+The remote market-research conversation UI can be extended later by replacing the handoff payload with approved Consulting/Judge events without changing the frontend rendering contract.
+
+## Recommended next step
+
+Proceed to Phase 1 in MASTER_PLAN.md:
+
+1. Add PDF validation.
+2. Introduce raw extraction, normalized metadata, and confirmed metadata schemas.
+3. Preserve source page/location references where possible.
+4. Add category-based user metadata review.
+5. Add role and preparation-period validation.
+6. Keep the existing API routes as compatibility adapters while introducing workflow-oriented endpoints.
+
+Do not add LangGraph, Consulting, Supporting Agents, Planner, or Calendar functionality until the confirmed metadata boundary is implemented and tested.

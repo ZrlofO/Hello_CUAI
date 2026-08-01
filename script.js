@@ -1,370 +1,239 @@
-const hasPdfButton = document.querySelector("#hasPdfButton");
-const noPdfButton = document.querySelector("#noPdfButton");
-const backFromPdf = document.querySelector("#backFromPdf");
-const backFromManual = document.querySelector("#backFromManual");
-const pdfMode = document.querySelector("#pdfMode");
-const manualMode = document.querySelector("#manualMode");
+const workflowForm = document.querySelector("#workflowForm");
 const cvFile = document.querySelector("#cvFile");
 const fileName = document.querySelector("#fileName");
-const pdfRoleInput = document.querySelector("#pdfRoleInput");
 const extractButton = document.querySelector("#extractButton");
-const analyzeButton = document.querySelector("#analyzeButton");
-const resultCard = document.querySelector("#resultCard");
-const roleInput = document.querySelector("#roleInput");
-const educationInput = document.querySelector("#educationInput");
-const projectInput = document.querySelector("#projectInput");
-const workInput = document.querySelector("#workInput");
-const activityInput = document.querySelector("#activityInput");
-const strengthInput = document.querySelector("#strengthInput");
-const extraInput = document.querySelector("#extraInput");
-const manualInputs = [roleInput, educationInput, projectInput, workInput, activityInput, strengthInput, extraInput];
+const statusCard = document.querySelector("#statusCard");
+const statusTitle = document.querySelector("#statusTitle");
+const statusText = document.querySelector("#statusText");
+const reviewSection = document.querySelector("#reviewSection");
+const metadataPreferences = document.querySelector("#metadataPreferences");
+const metadataGroups = document.querySelector("#metadataGroups");
+const revisionLabel = document.querySelector("#revisionLabel");
+const addItemForm = document.querySelector("#addItemForm");
+const newCategory = document.querySelector("#newCategory");
+const newValue = document.querySelector("#newValue");
+const confirmButton = document.querySelector("#confirmButton");
+const discussionPanel = document.querySelector("#discussionPanel");
 
-function getManualText() {
-  return manualInputs
-    .map((input) => input?.value.trim())
-    .filter(Boolean)
-    .join(" ");
+let workflow = null;
+
+const categoryLabels = {
+  activities_and_career_experience: "Activities and career experience",
+  awards: "Awards",
+  leadership_and_contribution: "Leadership and contribution",
+  volunteering_and_contribution: "Volunteering and contribution",
+  language_proficiency: "Language proficiency",
+  certifications_and_credentials: "Certifications and credentials",
+  projects: "Projects",
+  research: "Research",
+  internships: "Internships",
+  competitions: "Competitions",
+  technical_skills: "Technical skills",
+  education_and_training: "Education and training",
+  additional_information: "Additional information",
+};
+
+function escapeHtml(value) {
+  return String(value == null ? "" : value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
-function setInputMode(mode) {
-  const isPdf = mode === "pdf";
-  const isManual = mode === "manual";
-
-  hasPdfButton.classList.toggle("active", isPdf);
-  noPdfButton.classList.toggle("active", isManual);
-  pdfMode.classList.toggle("active", isPdf);
-  manualMode.classList.toggle("active", isManual);
-  analyzeButton.classList.toggle("hidden", !isManual);
+function setStatus(title, message, isError) {
+  statusTitle.textContent = title;
+  statusText.textContent = message;
+  statusCard.classList.toggle("caution-card", Boolean(isError));
 }
 
-function resetInputMode() {
-  hasPdfButton.classList.remove("active");
-  noPdfButton.classList.remove("active");
-  pdfMode.classList.remove("active");
-  manualMode.classList.remove("active");
-  analyzeButton.classList.add("hidden");
-}
-
-function renderMessage(label, title, items = []) {
-  resultCard.innerHTML = `
-    <span class="result-label">${label}</span>
-    <h3>${title}</h3>
-    ${items.length ? `<ul>${items.map((item) => `<li>${item}</li>`).join("")}</ul>` : ""}
-  `;
-}
-
-function getCompletedActions() {
-  try {
-    return JSON.parse(localStorage.getItem("hicareer-completed-actions")) || {};
-  } catch {
-    return {};
-  }
-}
-
-function setCompletedAction(id, done) {
-  const completed = getCompletedActions();
-  completed[id] = done;
-  localStorage.setItem("hicareer-completed-actions", JSON.stringify(completed));
-}
-
-function renderList(items) {
-  return items?.length ? `<ul>${items.map((item) => `<li>${item}</li>`).join("")}</ul>` : "";
-}
-
-function renderLlmReport(report) {
-  if (!report || report.error) {
-    return report?.error ? `<p class="extract-meta">LLM 리포트 fallback: ${report.error}</p>` : "";
-  }
-
-  return `
-    <div class="llm-report">
-      <span class="result-label">LLM Career Report</span>
-      <h4>${report.headline || "CV와 공고 fit을 요약했습니다."}</h4>
-      ${report.cvSummary ? `<p>${report.cvSummary}</p>` : ""}
-      <div class="llm-grid">
-        <article>
-          <h5>강점</h5>
-          ${renderList(report.strengths || [])}
-        </article>
-        <article>
-          <h5>보완할 증거</h5>
-          ${renderList(report.evidenceGaps || [])}
-        </article>
-      </div>
-      <div class="llm-section">
-        <h5>공고별 fit 해석</h5>
-        ${(report.jobFitNotes || [])
-          .map(
-            (item) => `
-              <article>
-                <strong>${item.title}</strong>
-                <p>${item.fitReason}</p>
-                <small>${item.risk}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="llm-section">
-        <h5>추천 액션</h5>
-        ${(report.recommendedActions || [])
-          .map(
-            (item) => `
-              <article>
-                <strong>${item.title}</strong>
-                <p>${item.why}</p>
-                <small>${item.timeEstimate}</small>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      ${report.profileUpdatePrompt ? `<p class="profile-prompt">${report.profileUpdatePrompt}</p>` : ""}
-    </div>
-  `;
-}
-
-function renderAgent(agent) {
-  if (!agent) return "";
-  const completed = getCompletedActions();
-  return `
-    <div class="agent-section">
-      <div class="agent-header">
-        <span class="result-label">Agent Execution</span>
-        <h4>HICAREER Agent가 실행한 단계</h4>
-      </div>
-      <div class="agent-trace">
-        ${agent.trace
-          .map(
-            (step) => `
-              <article>
-                <span>${step.step}</span>
-                <strong>${step.label}</strong>
-                <p>${step.detail}</p>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="agent-grid">
-        <article>
-          <h4>공통 요구 표현</h4>
-          <div class="skill-row">${agent.commonRequirements.map((item) => `<span>${item}</span>`).join("")}</div>
-        </article>
-        <article>
-          <h4>증거 gap</h4>
-          ${renderList(agent.evidenceGaps)}
-        </article>
-      </div>
-      <div class="opportunity-list">
-        <h4>gap을 채울 추천 활동</h4>
-        ${agent.opportunities
-          .map(
-            (item) => `
-              <article class="opportunity-mini-card">
-                <div class="job-card-top">
-                  <span class="fit high">Fit ${item.fit}</span>
-                  <span class="deadline">${item.deadline}</span>
-                </div>
-                <strong>${item.title}</strong>
-                <p>${item.why}</p>
-                <small>${item.source} · 예상 ${item.duration}</small>
-                <a href="${item.url}" target="_blank" rel="noopener noreferrer">확인하기</a>
-              </article>
-            `,
-          )
-          .join("")}
-      </div>
-      <div class="weekly-plan">
-        <h4>이번 주 액션</h4>
-        ${agent.weeklyPlan
-          .map(
-            (action) => `
-              <label class="action-check">
-                <input type="checkbox" data-action-id="${action.id}" ${completed[action.id] ? "checked" : ""} />
-                <span>
-                  <strong>${action.title}</strong>
-                  <small>${action.source} · ${action.duration}</small>
-                  <em>${action.reason}</em>
-                </span>
-              </label>
-            `,
-          )
-          .join("")}
-      </div>
-    </div>
-  `;
-}
-
-function bindActionChecks() {
-  document.querySelectorAll("[data-action-id]").forEach((checkbox) => {
-    checkbox.addEventListener("change", () => {
-      setCompletedAction(checkbox.dataset.actionId, checkbox.checked);
-    });
-  });
-}
-
-function renderLoading() {
-  resultCard.innerHTML = `
-    <span class="result-label">분석 중</span>
-    <h3>CV를 읽고 현재 채용공고와 fit을 계산하고 있어요.</h3>
-    <div class="analysis-loading"><span></span><span></span><span></span></div>
-  `;
-}
-
-async function readJsonResponse(response) {
-  const contentType = response.headers.get("content-type") || "";
-  if (!contentType.includes("application/json")) {
-    throw new Error("실시간 분석 API가 연결되지 않았어요. `python3 server.py`로 실행한 주소에서 다시 열어주세요.");
-  }
-
+async function readJson(response) {
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data.error || "분석에 실패했습니다.");
+    const error = new Error(data.error || "요청에 실패했습니다.");
+    error.payload = data;
+    throw error;
   }
   return data;
 }
 
-function renderAnalysis(data) {
-  const summary = data.summary;
-  const rankedJobs = data.rankedJobs || [];
-
-  resultCard.innerHTML = `
-    <span class="result-label">Retrieval Fit 리포트</span>
-    <h3>${summary.targetRole} 기준 추천 공고를 랭킹했습니다.</h3>
-    <div class="summary-grid">
-      <div><strong>${summary.extractedCharacters}</strong><span>추출 문자</span></div>
-      <div><strong>${summary.pdf?.method === "openai_input_file" ? "LLM" : summary.pdf?.pages || 0}</strong><span>정리 방식</span></div>
-      <div><strong>${rankedJobs.length}</strong><span>추천 공고</span></div>
-    </div>
-    <p class="extract-meta">정리 방식: ${summary.pdf?.method || "manual"}</p>
-    ${renderLlmReport(data.llmReport)}
-    <div class="analysis-block">
-      <h4>강점</h4>
-      <ul>${summary.strengths.map((item) => `<li>${item}</li>`).join("")}</ul>
-    </div>
-    <div class="analysis-block">
-      <h4>보완할 증거</h4>
-      <ul>${summary.gaps.map((item) => `<li>${item}</li>`).join("")}</ul>
-    </div>
-    ${renderAgent(data.agent)}
-    <div class="ranked-jobs">
-      <h4>추천 채용공고 ranking</h4>
-      ${rankedJobs
-        .map(
-          (job, index) => `
-            <article class="ranked-job-card">
-              <div class="job-card-top">
-                <span class="fit high">#${index + 1} Fit ${job.fit}</span>
-                <span class="deadline">${job.deadline}</span>
-              </div>
-              <span class="job-source">${job.source || "검색"}</span>
-              <h4>${job.title}</h4>
-              <p class="company">${job.company}</p>
-              <p class="job-meta">${job.location}</p>
-              <div class="skill-row">${job.skills.map((skill) => `<span>${skill}</span>`).join("")}</div>
-              <ul class="fit-list">
-                ${job.fitReasons.map((reason) => `<li>${reason}</li>`).join("")}
-              </ul>
-              <p class="gap-copy"><strong>보완:</strong> ${job.gaps[0]}</p>
-              <a href="${job.url}" target="_blank" rel="noopener noreferrer">공고 보기</a>
-            </article>
-          `,
-        )
-        .join("")}
-    </div>
-  `;
-  bindActionChecks();
+function renderPreferences() {
+  const preferences = workflow.normalized_metadata.preferences;
+  metadataPreferences.innerHTML =
+    '<span class="result-label">Preference information</span>' +
+    "<h3>" + escapeHtml(preferences.preferred_role || "목표 직무 미입력") + "</h3>" +
+    "<p>준비 기간: " + escapeHtml(preferences.preparation_period || "미입력") + "</p>" +
+    (preferences.additional_information ? "<p>추가 정보: " + escapeHtml(preferences.additional_information) + "</p>" : "") +
+    '<small class="extract-meta">PDF ' + escapeHtml(workflow.pdf.filename) + " · " + workflow.pdf.page_count + " pages · " + escapeHtml(workflow.pdf.extraction_method) + "</small>";
 }
 
-function fillManualFields(fields) {
-  if (fields.targetRole && !roleInput.value.trim()) roleInput.value = fields.targetRole;
-  educationInput.value = fields.education || educationInput.value;
-  projectInput.value = fields.projects || projectInput.value;
-  workInput.value = fields.work || workInput.value;
-  activityInput.value = fields.activity || activityInput.value;
-  strengthInput.value = fields.strength || strengthInput.value;
-  extraInput.value = fields.extra || extraInput.value;
-}
+function renderGroups() {
+  const groups = new Map();
+  workflow.normalized_metadata.items.forEach(function(item) {
+    if (!groups.has(item.category)) groups.set(item.category, []);
+    groups.get(item.category).push(item);
+  });
 
-async function extractPdfToForm() {
-  if (cvFile.files.length === 0) {
-    renderMessage("PDF 대기 중", "먼저 CV PDF를 업로드해주세요.", ["PDF를 선택하면 텍스트 추출 후 질문 입력칸을 자동으로 채웁니다."]);
+  if (!workflow.normalized_metadata.items.length) {
+    metadataGroups.innerHTML = '<article class="wide-card caution-card"><h3>추출된 항목이 없습니다.</h3><p>이미지 기반 PDF일 수 있습니다. 아래 추가 정보 입력을 사용해 보완하세요.</p></article>';
     return;
   }
 
-  const formData = new FormData();
-  formData.append("cv_file", cvFile.files[0]);
-  formData.append("target_role", pdfRoleInput.value.trim());
-  renderMessage("PDF 추출 중", "LLM이 PDF를 직접 읽고 입력칸별 bullet point로 정리하고 있어요.", ["정리된 bullet point를 직접 수정한 다음 분석 버튼을 눌러주세요."]);
-  extractButton.disabled = true;
+  metadataGroups.innerHTML = Array.from(groups.entries()).map(function(entry) {
+    const category = entry[0];
+    const items = entry[1];
+    return '<article class="wide-card">' +
+      '<span class="eyebrow">' + escapeHtml(categoryLabels[category] || category) + "</span>" +
+      '<div class="metadata-items">' +
+      items.map(function(item) {
+        return '<div class="metadata-item" data-item-id="' + escapeHtml(item.item_id) + '">' +
+          '<div class="metadata-item-main">' +
+          '<textarea class="metadata-value">' + escapeHtml(item.normalized_value) + "</textarea>" +
+          "<small>provenance: " + escapeHtml(item.provenance) +
+          " · confidence: " + Number(item.extraction_confidence).toFixed(2) +
+          (item.source_page ? " · page " + item.source_page : "") + "</small></div>" +
+          '<div class="metadata-item-actions"><button type="button" class="button secondary save-item">수정</button>' +
+          '<button type="button" class="button secondary delete-item">삭제</button></div></div>';
+      }).join("") + "</div></article>";
+  }).join("");
 
+  document.querySelectorAll(".save-item").forEach(function(button) {
+    button.addEventListener("click", function() { updateItem(button.closest(".metadata-item")); });
+  });
+  document.querySelectorAll(".delete-item").forEach(function(button) {
+    button.addEventListener("click", function() { deleteItem(button.closest(".metadata-item")); });
+  });
+}
+
+function renderReview() {
+  revisionLabel.textContent = "revision " + workflow.revision;
+  renderPreferences();
+  renderGroups();
+  reviewSection.classList.remove("hidden");
+}
+
+function renderDiscussion(discussion) {
+  if (!discussionPanel || !discussion) return;
+  discussionPanel.innerHTML =
+    '<div class="agent-header"><span class="result-label">Agent Communication</span>' +
+    '<h4>확정 metadata handoff</h4><p>' + escapeHtml((discussion.warnings || []).join(" ")) + "</p></div>" +
+    '<div class="discussion-flow">' +
+    (discussion.discussionHistory || []).map(function(turn, index) {
+      return '<article class="dialogue-turn ' + escapeHtml(turn.tone || "agent") + '">' +
+        '<span>' + String(index + 1).padStart(2, "0") + '</span><div>' +
+        '<strong>' + escapeHtml(turn.speaker) + '</strong>' +
+        '<p>' + escapeHtml(turn.message) + '</p>' +
+        '<small>status: ' + escapeHtml(turn.status) +
+        (turn.evidence_refs && turn.evidence_refs.length ? ' · evidence refs: ' + turn.evidence_refs.length : '') +
+        '</small></div></article>';
+    }).join("") + '</div>';
+  discussionPanel.classList.remove("hidden");
+}
+
+async function createWorkflow(event) {
+  event.preventDefault();
+  if (!cvFile.files.length) {
+    setStatus("PDF가 필요합니다.", "PDF 파일을 선택해 주세요.", true);
+    return;
+  }
+  const formData = new FormData(workflowForm);
+  extractButton.disabled = true;
+  setStatus("metadata 추출 중", "PDF를 검증하고 텍스트와 source reference를 추출하고 있습니다.", false);
   try {
-    const response = await fetch("/api/extract-cv", { method: "POST", body: formData });
-    const data = await readJsonResponse(response);
-    fillManualFields(data.fields || {});
-    setInputMode("manual");
-    renderMessage("정리 완료", "LLM이 PDF를 읽고 입력칸을 bullet point로 채웠습니다.", [
-      "각 입력칸을 확인하고 필요한 부분을 수정한 뒤 분석 버튼을 눌러주세요.",
-      `정리 방식: ${data.pdf?.method || "unknown"}`,
-    ]);
+    const response = await fetch("/api/workflows", { method: "POST", body: formData });
+    workflow = await readJson(response);
+    setStatus("검토 필요", "추출 결과를 확인하고 수정한 뒤 확정하세요.", false);
+    renderReview();
   } catch (error) {
-    renderMessage("추출 실패", error.message, ["OPENAI_API_KEY가 설정되어 있는지 확인하거나 질문 입력으로 직접 작성해주세요."]);
+    setStatus("추출 실패", error.message, true);
   } finally {
     extractButton.disabled = false;
   }
 }
 
-async function analyzeManual() {
-  const response = await fetch("/api/analyze-cv", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      target_role: roleInput.value.trim(),
-      cv_text: getManualText(),
-    }),
-  });
-  return readJsonResponse(response);
-}
-
-async function renderReport() {
-  const isPdfMode = pdfMode.classList.contains("active");
-  const isManualMode = manualMode.classList.contains("active");
-
-  if (!isPdfMode && !isManualMode) {
-    renderMessage("먼저 선택", "CV PDF가 있는지 먼저 알려주세요.", ["PDF가 있으면 업로드 화면을, 없으면 질문형 스펙 입력창을 열어드립니다."]);
+async function updateItem(element) {
+  const value = element.querySelector(".metadata-value").value.trim();
+  if (!value) {
+    setStatus("수정할 수 없습니다.", "metadata 내용은 비워둘 수 없습니다.", true);
     return;
   }
-
-  if (isPdfMode) {
-    renderMessage("먼저 PDF 정리", "PDF를 바로 분석하지 않고 LLM으로 입력칸을 먼저 채웁니다.", ["`LLM으로 PDF 정리해서 입력칸 채우기` 버튼을 누른 뒤 내용을 수정하고 분석해주세요."]);
-    return;
-  }
-
-  if (isManualMode && !getManualText()) {
-    renderMessage("입력 필요", "질문 입력칸을 하나 이상 채워주세요.", ["목표 직무와 프로젝트 경험만 적어도 1차 retrieval fit 분석이 가능합니다."]);
-    return;
-  }
-
-  renderLoading();
-  analyzeButton.disabled = true;
-
   try {
-    const data = await analyzeManual();
-    renderAnalysis(data);
+    const response = await fetch("/api/workflows/" + workflow.request_id + "/metadata/items/" + element.dataset.itemId, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base_revision: workflow.revision, normalized_value: value }),
+    });
+    workflow = await readJson(response);
+    setStatus("수정 완료", "사용자 수정 내용이 저장되었습니다.", false);
+    renderReview();
   } catch (error) {
-    renderMessage("분석 실패", error.message, ["백엔드는 `python3 server.py`로 실행해야 하고, PDF 정리는 OPENAI_API_KEY가 필요합니다."]);
-  } finally {
-    analyzeButton.disabled = false;
+    setStatus("수정 실패", error.message, true);
   }
 }
 
-hasPdfButton.addEventListener("click", () => setInputMode("pdf"));
-noPdfButton.addEventListener("click", () => setInputMode("manual"));
-backFromPdf.addEventListener("click", resetInputMode);
-backFromManual.addEventListener("click", resetInputMode);
-cvFile.addEventListener("change", () => {
-  fileName.textContent = cvFile.files[0]?.name || "이력서 또는 CV 파일을 올려주세요.";
+async function deleteItem(element) {
+  if (!window.confirm("이 metadata 항목을 삭제할까요?")) return;
+  try {
+    const response = await fetch("/api/workflows/" + workflow.request_id + "/metadata/items/" + element.dataset.itemId, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base_revision: workflow.revision }),
+    });
+    workflow = await readJson(response);
+    setStatus("삭제 완료", "항목이 삭제되었습니다.", false);
+    renderReview();
+  } catch (error) {
+    setStatus("삭제 실패", error.message, true);
+  }
+}
+
+async function addMetadataItem(event) {
+  event.preventDefault();
+  const value = newValue.value.trim();
+  if (!value) return;
+  try {
+    const response = await fetch("/api/workflows/" + workflow.request_id + "/metadata/items", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        base_revision: workflow.revision,
+        category: newCategory.value,
+        normalized_value: value,
+        original_text: value,
+      }),
+    });
+    workflow = await readJson(response);
+    newValue.value = "";
+    setStatus("추가 완료", "사용자 제공 metadata가 추가되었습니다.", false);
+    renderReview();
+  } catch (error) {
+    setStatus("추가 실패", error.message, true);
+  }
+}
+
+async function confirmMetadata() {
+  confirmButton.disabled = true;
+  try {
+    const response = await fetch("/api/workflows/" + workflow.request_id + "/metadata/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base_revision: workflow.revision }),
+    });
+    workflow = await readJson(response);
+    setStatus("metadata 확정 완료", "확정된 프로필이 저장되었습니다. 다음 Phase에서 graph resume을 연결합니다.", false);
+    confirmButton.textContent = "확정 완료";
+    const discussionResponse = await fetch("/api/workflows/" + workflow.request_id + "/discussion");
+    renderDiscussion(await readJson(discussionResponse));
+  } catch (error) {
+    setStatus("확정 실패", error.message, true);
+    confirmButton.disabled = false;
+  }
+}
+
+cvFile.addEventListener("change", function() {
+  fileName.textContent = cvFile.files[0] ? cvFile.files[0].name : "CV PDF를 선택하세요";
 });
-extractButton?.addEventListener("click", extractPdfToForm);
-analyzeButton.addEventListener("click", renderReport);
+workflowForm.addEventListener("submit", createWorkflow);
+addItemForm.addEventListener("submit", addMetadataItem);
+confirmButton.addEventListener("click", confirmMetadata);

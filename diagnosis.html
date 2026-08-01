@@ -3,10 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>진단 시작 | HICAREER</title>
+    <title>CV Metadata Review | HICAREER</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+KR:wght@400;500;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -14,47 +13,71 @@
       <nav class="nav">
         <a class="brand" href="index.html"><span class="brand-mark">HI</span><span>HICAREER</span></a>
         <div class="nav-links">
-          <a href="index.html">홈</a><a class="active" href="diagnosis.html">진단</a><a href="report.html">리포트</a><a href="opportunities.html">활동 추천</a><a href="plan.html">성장 플랜</a>
+          <a href="index.html">홈</a>
+          <a class="active" href="diagnosis.html">CV 진단</a>
+          <a href="report.html">리포트</a>
+          <a href="opportunities.html">추천 활동</a>
+          <a href="plan.html">성장 플랜</a>
         </div>
-        <a class="nav-cta" href="report.html">리포트 보기</a>
+        <a class="nav-cta" href="diagnosis.html">새 분석</a>
       </nav>
     </header>
-
     <main class="page-shell">
       <section class="page-title">
-        <span class="eyebrow">Step 1</span>
-        <h1>먼저 CV PDF가 있는지 알려주세요.</h1>
-        <p>PDF가 있으면 업로드하고, 없다면 질문형 입력으로 현재 스펙을 정리합니다.</p>
+        <span class="eyebrow">Phase 1</span>
+        <h1>CV를 확인 가능한 metadata로 정리합니다</h1>
+        <p>PDF를 업로드하고 목표 직무와 준비 기간을 입력한 뒤, 추출된 항목을 직접 검토·수정·확정하세요.</p>
       </section>
-
       <section class="diagnosis-panel">
-        <div class="choice-grid" id="choiceGrid">
-          <button class="choice-card" id="hasPdfButton" type="button"><span>PDF 있음</span><strong>CV 파일 업로드</strong><small>파일 기반 진단 흐름으로 이동합니다.</small></button>
-          <button class="choice-card" id="noPdfButton" type="button"><span>PDF 없음</span><strong>질문으로 스펙 입력</strong><small>목표 직무와 경험을 직접 입력합니다.</small></button>
+        <form id="workflowForm" class="question-grid">
+          <label>목표 직무<input id="preferredRole" name="preferred_role" required placeholder="예: AI Engineer, Frontend Developer" /></label>
+          <label>준비 기간<input id="preparationPeriod" name="preparation_period" required placeholder="예: 8주, 3개월" /></label>
+          <label>추가 정보<textarea id="additionalInformation" name="additional_information" placeholder="CV에 없지만 분석에 반영할 정보가 있다면 입력하세요."></textarea></label>
+          <label class="upload-box" for="cvFile">
+            <input id="cvFile" name="cv_file" type="file" accept="application/pdf,.pdf" required />
+            <span class="upload-icon">PDF</span>
+            <strong id="fileName">CV PDF를 선택하세요</strong>
+            <small>PDF만 지원합니다. 원문은 추적성을 위해 보존되며, 분석 전 metadata를 확인합니다.</small>
+          </label>
+          <button class="button primary full" type="submit" id="extractButton">PDF 추출 및 metadata 생성</button>
+        </form>
+        <div id="statusCard" class="result-card">
+          <span class="result-label">상태</span>
+          <h3 id="statusTitle">PDF를 업로드하면 검토 화면이 표시됩니다.</h3>
+          <p id="statusText">추출 결과는 확정 전까지 downstream 분석에 사용되지 않습니다.</p>
         </div>
-
-        <div class="input-mode" id="pdfMode">
-          <div class="mode-header"><div><span class="step-label">Step 2A</span><h3>CV PDF 업로드</h3></div><button class="text-button" id="backFromPdf" type="button">다시 선택</button></div>
-          <label class="role-field">목표 직무<input id="pdfRoleInput" type="text" placeholder="예: AI 인턴, 프론트엔드 신입, 데이터 분석가" /></label>
-          <label class="upload-box" for="cvFile"><input id="cvFile" type="file" accept="application/pdf,.pdf" /><span class="upload-icon">PDF</span><strong id="fileName">이력서 또는 CV 파일을 올려주세요.</strong><small>LLM이 PDF를 직접 읽고 질문 입력칸에 들어갈 bullet point로 정리합니다.</small></label>
-          <button class="button secondary full" id="extractButton" type="button">LLM으로 PDF 정리해서 입력칸 채우기</button>
-        </div>
-
-        <div class="input-mode" id="manualMode">
-          <div class="mode-header"><div><span class="step-label">Step 2B</span><h3>스펙 질문 입력</h3></div><button class="text-button" id="backFromManual" type="button">다시 선택</button></div>
-          <div class="question-grid">
-            <label>목표 직무<input id="roleInput" type="text" placeholder="예: AI 엔지니어, 프론트엔드 개발자, 마케터" /></label>
-            <label>전공/교육<input id="educationInput" type="text" placeholder="예: 컴퓨터공학, 데이터 분석 부트캠프" /></label>
-            <label>프로젝트·논문·오픈소스<textarea id="projectInput" placeholder="직무 역량을 증명하는 결과물과 성과를 적어주세요."></textarea></label>
-            <label>인턴/실무 경험<textarea id="workInput" placeholder="회사, 역할, 기여도, 사용 도구, 정량 성과를 적어주세요."></textarea></label>
-            <label>대외활동·공모전·봉사<textarea id="activityInput" placeholder="직무와 연결되는 활동, 수상, 운영 경험을 적어주세요."></textarea></label>
-            <label>본인이 생각하는 강점<textarea id="strengthInput" placeholder="예: 빠른 학습, 실험 설계, 커뮤니케이션, 끈기"></textarea></label>
-            <label>기타 / 원문에서 더 반영할 내용<textarea id="extraInput" placeholder="PDF에서 추출된 원문, 링크, 기술스택, 수상 세부 내용 등을 자유롭게 수정하세요."></textarea></label>
+        <section id="reviewSection" class="hidden">
+          <div class="section-heading between">
+            <div>
+              <span class="eyebrow">Metadata Review</span>
+              <h2>추출된 정보를 확인하세요</h2>
+              <p>각 항목의 출처와 provenance를 확인하고 잘못된 항목은 수정하거나 삭제하세요.</p>
+            </div>
+            <span id="revisionLabel" class="job-source"></span>
           </div>
-        </div>
-
-        <button class="button primary full hidden" id="analyzeButton" type="button">수정한 내용으로 증거 격차 분석하기</button>
-        <div class="result-card" id="resultCard"><span class="result-label">대기 중</span><h3>입력 방식 선택 후 분석을 시작하세요.</h3><ul><li>분석 후 샘플 리포트 페이지로 이동할 수 있습니다.</li></ul></div>
+          <div id="metadataPreferences" class="result-card"></div>
+          <div id="metadataGroups" class="stacked-cards"></div>
+          <div id="discussionPanel" class="orchestration-panel hidden"></div>
+          <form id="addItemForm" class="result-card question-grid">
+            <h3>누락된 정보 추가</h3>
+            <label>카테고리<select id="newCategory">
+              <option value="activities_and_career_experience">Activities and career experience</option>
+              <option value="awards">Awards</option>
+              <option value="leadership_and_contribution">Leadership and contribution</option>
+              <option value="volunteering_and_contribution">Volunteering and contribution</option>
+              <option value="language_proficiency">Language proficiency</option>
+              <option value="certifications_and_credentials">Certifications and credentials</option>
+              <option value="projects">Projects</option>
+              <option value="research">Research</option>
+              <option value="technical_skills">Technical skills</option>
+              <option value="education_and_training">Education and training</option>
+              <option value="additional_information">Additional information</option>
+            </select></label>
+            <label>내용<textarea id="newValue" required placeholder="사용자가 직접 제공하는 내용을 입력하세요."></textarea></label>
+            <button class="button secondary" type="submit">항목 추가</button>
+          </form>
+          <button class="button primary full" id="confirmButton" type="button">확정하고 다음 단계로 이동</button>
+        </section>
       </section>
     </main>
     <script src="script.js"></script>

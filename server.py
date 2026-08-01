@@ -9,9 +9,15 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from xml.etree import ElementTree
+
+from app.metadata.extraction import extract_pdf, normalize_extraction
+from app.metadata.merge import add_item, confirm_metadata, delete_item, update_item
+from app.metadata.models import WorkflowState
+from app.agent_discussion import build_metadata_handoff_discussion
 
 ROOT = Path(__file__).resolve().parent
 HOST = os.getenv("HOST", "0.0.0.0")
@@ -25,6 +31,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
 OPENAI_ENDPOINT = "https://api.openai.com/v1/responses"
 
 _cache = {}
+_workflows = {}
 
 FALLBACK_JOBS = [
     {
@@ -1224,6 +1231,85 @@ def parse_analyze_request(headers, body):
     payload = json.loads(body.decode("utf-8") or "{}")
     return payload.get("cv_text", ""), payload.get("target_role", ""), "", {"method": "manual", "pages": 0}
 
+
+def workflow_json(workflow):
+    return json.loads(workflow.json())
+
+
+def workflow_request_payload(handler):
+    content_length = int(handler.headers.get("Content-Length", "0"))
+    return handler.rfile.read(content_length)
+
+
+def workflow_revision_check(workflow, payload):
+    expected = payload.get("base_revision")
+    if expected is None:
+        raise ValueError("base_revision is required")
+    if int(expected) != workflow.revision:
+        raise RevisionConflict(workflow.revision)
+
+
+class RevisionConflict(ValueError):
+    def __init__(self, current_revision):
+        super().__init__(f"Metadata revision conflict; current revision is {current_revision}")
+        self.current_revision = current_revision
+
+
+def get_workflow(workflow_id):
+    workflow = _workflows.get(workflow_id)
+    if workflow is None:
+        raise KeyError(f"Workflow not found: {workflow_id}")
+    return workflow
+
+
+def create_metadata_workflow(fields, files):
+    pdf_file = files.get("cv_file")
+    if not pdf_file:
+        raise ValueError("A PDF file is required")
+
+    filename = pdf_file.get("filename", "cv.pdf")
+    pdf_bytes = pdf_file.get("content", b"")
+    raw = extract_pdf(pdf_bytes, filename, "application/pdf")
+    normalized = normalize_extraction(
+        raw,
+        preferred_role=fields.get("preferred_role", fields.get("target_role", "")),
+        preparation_period=fields.get("preparation_period", ""),
+        additional_information=fields.get("additional_information", ""),
+    )
+    workflow = WorkflowState(
+        pdf=raw,
+        normalized_metadata=normalized,
+        warnings=[*raw.warnings, *normalized.warnings],
+    )
+    _workflows[workflow.request_id] = workflow
+    return workflow
+
+
+def update_workflow_metadata(workflow, operation, payload):
+    workflow_revision_check(workflow, payload)
+    metadata = workflow.normalized_metadata
+    if operation == "update":
+        metadata = update_item(metadata, payload.get("item_id", ""), payload)
+    elif operation == "delete":
+        metadata = delete_item(metadata, payload.get("item_id", ""))
+    elif operation == "add":
+        metadata = add_item(metadata, payload)
+    else:
+        raise ValueError("Unsupported metadata operation")
+    workflow.normalized_metadata = metadata
+    workflow.revision += 1
+    workflow.updated_at = datetime.now(timezone.utc)
+    return workflow
+
+
+def confirm_workflow_metadata(workflow, payload):
+    workflow_revision_check(workflow, payload)
+    workflow.user_confirmed_metadata = confirm_metadata(workflow.normalized_metadata, workflow.revision + 1)
+    workflow.revision += 1
+    workflow.status = "METADATA_CONFIRMED"
+    workflow.updated_at = datetime.now(timezone.utc)
+    return workflow
+
 class HICareerHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
@@ -1233,10 +1319,19 @@ class HICareerHandler(SimpleHTTPRequestHandler):
         if parsed_url.path == "/api/jobs/popular":
             self.handle_popular_jobs(parsed_url)
             return
+        if parsed_url.path.startswith("/api/workflows/"):
+            self.handle_workflow_get(parsed_url)
+            return
         super().do_GET()
 
     def do_POST(self):
         parsed_url = urllib.parse.urlparse(self.path)
+        if parsed_url.path == "/api/workflows":
+            self.handle_workflow_create()
+            return
+        if parsed_url.path.startswith("/api/workflows/"):
+            self.handle_workflow_post(parsed_url)
+            return
         if parsed_url.path == "/api/analyze-cv":
             self.handle_analyze_cv()
             return
@@ -1244,6 +1339,100 @@ class HICareerHandler(SimpleHTTPRequestHandler):
             self.handle_extract_cv()
             return
         self.send_error(404, "Not found")
+
+    def do_PATCH(self):
+        parsed_url = urllib.parse.urlparse(self.path)
+        if parsed_url.path.startswith("/api/workflows/"):
+            self.handle_workflow_patch(parsed_url)
+            return
+        self.send_error(404, "Not found")
+
+    def do_DELETE(self):
+        parsed_url = urllib.parse.urlparse(self.path)
+        if parsed_url.path.startswith("/api/workflows/"):
+            self.handle_workflow_delete(parsed_url)
+            return
+        self.send_error(404, "Not found")
+
+    def handle_workflow_create(self):
+        try:
+            body = workflow_request_payload(self)
+            fields, files = parse_multipart(body, self.headers.get("Content-Type", ""))
+            workflow = create_metadata_workflow(fields, files)
+            self.send_json(workflow_json(workflow), status=201)
+        except (ValueError, RuntimeError) as exc:
+            self.send_json({"error": str(exc)}, status=422)
+        except Exception as exc:
+            self.send_json({"error": f"Metadata workflow creation failed: {exc.__class__.__name__}"}, status=500)
+
+    def handle_workflow_get(self, parsed_url):
+        parts = [part for part in parsed_url.path.split("/") if part]
+        if len(parts) == 4 and parts[0:2] == ["api", "workflows"] and parts[3] == "discussion":
+            try:
+                self.send_json(build_metadata_handoff_discussion(get_workflow(parts[2])))
+            except KeyError as exc:
+                self.send_json({"error": str(exc)}, status=404)
+            return
+        if len(parts) != 3 or parts[0:2] != ["api", "workflows"]:
+            self.send_json({"error": "Not found"}, status=404)
+            return
+        try:
+            self.send_json(workflow_json(get_workflow(parts[2])))
+        except KeyError as exc:
+            self.send_json({"error": str(exc)}, status=404)
+
+    def handle_workflow_patch(self, parsed_url):
+        parts = [part for part in parsed_url.path.split("/") if part]
+        if len(parts) != 6 or parts[0:2] != ["api", "workflows"] or parts[3:5] != ["metadata", "items"]:
+            self.send_json({"error": "Not found"}, status=404)
+            return
+        try:
+            payload = json.loads(workflow_request_payload(self).decode("utf-8") or "{}")
+            payload["item_id"] = parts[5]
+            workflow = get_workflow(parts[2])
+            update_workflow_metadata(workflow, "update", payload)
+            self.send_json(workflow_json(workflow))
+        except RevisionConflict as exc:
+            self.send_json({"error": str(exc), "current_revision": exc.current_revision}, status=409)
+        except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, status=400)
+
+    def handle_workflow_delete(self, parsed_url):
+        parts = [part for part in parsed_url.path.split("/") if part]
+        if len(parts) != 6 or parts[0:2] != ["api", "workflows"] or parts[3:5] != ["metadata", "items"]:
+            self.send_json({"error": "Not found"}, status=404)
+            return
+        try:
+            workflow = get_workflow(parts[2])
+            payload = json.loads(workflow_request_payload(self).decode("utf-8") or "{}")
+            payload["item_id"] = parts[5]
+            update_workflow_metadata(workflow, "delete", payload)
+            self.send_json(workflow_json(workflow))
+        except RevisionConflict as exc:
+            self.send_json({"error": str(exc), "current_revision": exc.current_revision}, status=409)
+        except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, status=400)
+
+    def handle_workflow_post(self, parsed_url):
+        parts = [part for part in parsed_url.path.split("/") if part]
+        if len(parts) < 3 or parts[0:2] != ["api", "workflows"]:
+            self.send_json({"error": "Not found"}, status=404)
+            return
+        try:
+            workflow = get_workflow(parts[2])
+            payload = json.loads(workflow_request_payload(self).decode("utf-8") or "{}")
+            if len(parts) == 5 and parts[3:5] == ["metadata", "items"]:
+                update_workflow_metadata(workflow, "add", payload)
+            elif len(parts) == 5 and parts[3:5] == ["metadata", "confirm"]:
+                confirm_workflow_metadata(workflow, payload)
+            else:
+                self.send_json({"error": "Not found"}, status=404)
+                return
+            self.send_json(workflow_json(workflow))
+        except RevisionConflict as exc:
+            self.send_json({"error": str(exc), "current_revision": exc.current_revision}, status=409)
+        except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, status=400)
 
     def handle_popular_jobs(self, parsed_url):
         query = urllib.parse.parse_qs(parsed_url.query)
