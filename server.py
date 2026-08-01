@@ -22,6 +22,23 @@ from app.agent_discussion import build_metadata_handoff_discussion
 from app.graph.runner import GraphExecutionTimeout, graph_snapshot, invoke_graph, resume_graph
 from app.metadata.models import NormalizedMetadata, RawExtraction, UserConfirmedMetadata
 from app.evidence.ledger import EvidenceLedger
+from app.retrieval.adapters import LegacyJobSearchAdapter
+from app.retrieval.models import RetrievalRequest
+from app.retrieval.pipeline import RetrievalPipeline
+from app.retrieval.registry import default_source_registry
+from app.consulting.agent import ConsultingAgent
+from app.consulting.models import ConsultingRequest
+from app.supporting.models import SupportingAgentRequest, ConsultingReviewRequest
+from app.supporting.runner import run_supporting_agents
+from app.supporting.review import review_supporting_output
+from app.judge.models import JudgeRequest
+from app.judge.service import JudgeService
+from app.readiness.models import ReadinessRequest
+from app.readiness.policy import ReadinessPolicy
+from app.planner.models import PlannerRequest
+from app.planner.service import PlannerAgent
+from app.calendar.models import CalendarBatchRequest
+from app.calendar.service import CalendarService, MockAuthorizationBoundary, MockCalendarProvider
 
 ROOT = Path(__file__).resolve().parent
 HOST = os.getenv("HOST", "0.0.0.0")
@@ -426,6 +443,22 @@ def fetch_work24_jobs(limit):
 
     _cache[cache_key] = {"saved_at": time.time(), "jobs": jobs}
     return jobs[:limit]
+
+
+def build_retrieval_pipeline():
+    registry = default_source_registry()
+    return RetrievalPipeline(
+        registry=registry,
+        providers={
+            "saramin": LegacyJobSearchAdapter("saramin", lambda query, limit: scrape_saramin_jobs(query, limit)),
+            "jobkorea": LegacyJobSearchAdapter("jobkorea", lambda query, limit: scrape_jobkorea_jobs(query, limit)),
+            "work24": LegacyJobSearchAdapter("work24", lambda query, limit: fetch_work24_jobs(limit)),
+        },
+    )
+
+
+def build_consulting_agent():
+    return ConsultingAgent(build_retrieval_pipeline())
 
 
 
@@ -1409,6 +1442,30 @@ class HICareerHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed_url = urllib.parse.urlparse(self.path)
+        if parsed_url.path == "/api/calendar/mock":
+            self.handle_calendar_mock()
+            return
+        if parsed_url.path == "/api/planner/plan":
+            self.handle_planner_plan()
+            return
+        if parsed_url.path == "/api/readiness/classify":
+            self.handle_readiness_classify()
+            return
+        if parsed_url.path == "/api/judge/debate":
+            self.handle_judge_debate()
+            return
+        if parsed_url.path == "/api/supporting/analyze":
+            self.handle_supporting_analyze()
+            return
+        if parsed_url.path == "/api/consulting/review":
+            self.handle_consulting_review()
+            return
+        if parsed_url.path == "/api/consulting/analyze":
+            self.handle_consulting_analyze()
+            return
+        if parsed_url.path == "/api/retrieval/search":
+            self.handle_retrieval_search()
+            return
         if parsed_url.path == "/api/workflows":
             self.handle_workflow_create()
             return
@@ -1422,6 +1479,99 @@ class HICareerHandler(SimpleHTTPRequestHandler):
             self.handle_extract_cv()
             return
         self.send_error(404, "Not found")
+
+    def handle_calendar_mock(self):
+        try:
+            payload = json.loads(workflow_request_payload(self).decode("utf-8") or "{}")
+            request = CalendarBatchRequest.model_validate(payload)
+            service = CalendarService(
+                provider=MockCalendarProvider(),
+                authorization=MockAuthorizationBoundary(request.authorization_status),
+            )
+            self.send_json(service.create_approved_events(request).model_dump(mode="json"))
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, status=422)
+        except Exception as exc:
+            self.send_json({"error": f"Calendar mock boundary failed safely: {exc.__class__.__name__}"}, status=502)
+
+    def handle_planner_plan(self):
+        try:
+            payload = json.loads(workflow_request_payload(self).decode("utf-8") or "{}")
+            request = PlannerRequest.model_validate(payload)
+            self.send_json(PlannerAgent().plan(request).model_dump(mode="json"))
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, status=422)
+        except Exception as exc:
+            self.send_json({"error": f"Planner failed safely: {exc.__class__.__name__}"}, status=502)
+
+    def handle_readiness_classify(self):
+        try:
+            payload = json.loads(workflow_request_payload(self).decode("utf-8") or "{}")
+            request = ReadinessRequest.model_validate(payload)
+            self.send_json(ReadinessPolicy().classify(request).model_dump(mode="json"))
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, status=422)
+        except Exception as exc:
+            self.send_json({"error": f"Readiness classification failed safely: {exc.__class__.__name__}"}, status=502)
+
+    def handle_judge_debate(self):
+        try:
+            payload = json.loads(workflow_request_payload(self).decode("utf-8") or "{}")
+            request = JudgeRequest.model_validate(payload)
+            self.send_json(JudgeService().debate(request).model_dump(mode="json"))
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, status=422)
+        except Exception as exc:
+            self.send_json({"error": f"Judge failed safely: {exc.__class__.__name__}"}, status=502)
+
+    def handle_supporting_analyze(self):
+        try:
+            payload = json.loads(workflow_request_payload(self).decode("utf-8") or "{}")
+            request = SupportingAgentRequest.model_validate(payload)
+            result = run_supporting_agents(request)
+            self.send_json(result.model_dump(mode="json"))
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, status=422)
+        except Exception as exc:
+            self.send_json({"error": f"Supporting analysis failed safely: {exc.__class__.__name__}"}, status=502)
+
+    def handle_consulting_review(self):
+        try:
+            payload = json.loads(workflow_request_payload(self).decode("utf-8") or "{}")
+            request = ConsultingReviewRequest.model_validate(payload)
+            self.send_json(review_supporting_output(request).model_dump(mode="json"))
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, status=422)
+        except Exception as exc:
+            self.send_json({"error": f"Consulting review failed safely: {exc.__class__.__name__}"}, status=502)
+
+    def handle_consulting_analyze(self):
+        try:
+            payload = json.loads(workflow_request_payload(self).decode("utf-8") or "{}")
+            request = ConsultingRequest.model_validate(payload)
+            response, ledger = build_consulting_agent().analyze(request)
+            self.send_json({
+                "consulting": response.model_dump(mode="json"),
+                "evidence_ledger": ledger.model_dump(mode="json"),
+            })
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, status=422)
+        except Exception as exc:
+            self.send_json({"error": f"Consulting analysis failed safely: {exc.__class__.__name__}"}, status=502)
+
+    def handle_retrieval_search(self):
+        try:
+            payload = json.loads(workflow_request_payload(self).decode("utf-8") or "{}")
+            request = RetrievalRequest.model_validate(payload)
+            response, ledger = build_retrieval_pipeline().run(request)
+            self.send_json({
+                "retrieval": response.model_dump(mode="json"),
+                "evidence_ledger": ledger.model_dump(mode="json"),
+            })
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, status=422)
+        except Exception as exc:
+            self.send_json({"error": f"Retrieval failed safely: {exc.__class__.__name__}"}, status=502)
 
     def do_PATCH(self):
         parsed_url = urllib.parse.urlparse(self.path)
