@@ -58,3 +58,17 @@ WORK24_AUTH_KEY=발급받은_키 python3 server.py
 python3 server.py
 # http://localhost:8080/api/jobs/popular?limit=6&keyword=AI%20인턴
 ```
+
+## CV 분석 및 fit ranking MVP
+
+`/api/analyze-cv`는 PDF 업로드 또는 질문형 입력 텍스트를 받아 현재 채용공고와 비교합니다.
+
+동작 흐름:
+
+1. PDF 업로드 시 서버에서 텍스트를 추출합니다.
+2. 목표 직무 키워드로 사람인/잡코리아 공고를 검색합니다.
+3. CV 텍스트와 공고 문서를 토큰 벡터로 변환합니다.
+4. cosine similarity와 기술스택 overlap을 합쳐 fit score를 계산합니다.
+5. 추천 이유, 부족한 증거, 보완 액션을 함께 반환합니다.
+
+현재는 외부 dependency 없이 동작하는 MVP입니다. 더 정확한 PDF 파싱은 `pypdf`, Affinda, 또는 OCR API를 연결하면 개선할 수 있습니다.

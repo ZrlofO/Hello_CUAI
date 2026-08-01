@@ -1,5 +1,7 @@
 import html
+import io
 import json
+import math
 import mimetypes
 import os
 import re
@@ -7,6 +9,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from xml.etree import ElementTree
@@ -408,6 +411,246 @@ def fetch_work24_jobs(limit):
     return jobs[:limit]
 
 
+
+SKILL_KEYWORDS = {
+    "Python": ["python", "파이썬"],
+    "SQL": ["sql", "데이터베이스", "database"],
+    "React": ["react", "프론트엔드", "frontend"],
+    "TypeScript": ["typescript", "ts"],
+    "LLM": ["llm", "gpt", "agent", "에이전트", "생성형"],
+    "머신러닝": ["머신러닝", "machine learning", "ml", "모델"],
+    "딥러닝": ["딥러닝", "deep learning", "pytorch", "tensorflow"],
+    "API": ["api", "백엔드", "backend", "server", "서버"],
+    "기획": ["기획", "pm", "product", "프로덕트"],
+    "UX": ["ux", "사용자", "리서치", "research"],
+    "협업": ["협업", "팀", "리더", "운영", "communication"],
+    "오픈소스": ["오픈소스", "open source", "github", "pr"],
+    "해커톤": ["해커톤", "hackathon", "공모전", "수상"],
+}
+
+GAP_RECOMMENDATIONS = {
+    "Python": "Python 기반 데이터/AI 미니 프로젝트를 하나 더 배포하세요.",
+    "SQL": "SQL 분석 과제나 대시보드 프로젝트로 데이터 근거를 보강하세요.",
+    "React": "React로 배포된 포트폴리오 프로젝트 링크를 추가하세요.",
+    "TypeScript": "TypeScript 리팩토링 경험을 README에 명확히 남기세요.",
+    "LLM": "LLM Agent 해커톤이나 RAG 프로젝트를 만들어보세요.",
+    "머신러닝": "모델 학습/평가 지표가 포함된 프로젝트를 추가하세요.",
+    "딥러닝": "PyTorch 기반 실험 로그와 결과 비교표를 CV에 연결하세요.",
+    "API": "API 설계/배포 경험을 보여주는 백엔드 프로젝트를 보강하세요.",
+    "기획": "문제정의-지표-실험 중심의 서비스 기획 사례를 정리하세요.",
+    "UX": "사용자 인터뷰나 UT 결과가 담긴 케이스 스터디를 추가하세요.",
+    "협업": "팀 프로젝트에서 맡은 역할과 의사결정 근거를 더 구체화하세요.",
+    "오픈소스": "작은 오픈소스 PR 1개로 외부 협업 증거를 만드세요.",
+    "해커톤": "직무와 맞는 해커톤/공모전으로 외부 검증 이력을 확보하세요.",
+}
+
+
+def decode_pdf_literal(value):
+    value = value.replace(r"\(", "(").replace(r"\)", ")").replace(r"\\", "\\")
+    value = re.sub(r"\\([nrtbf])", " ", value)
+    value = re.sub(r"\\[0-7]{1,3}", " ", value)
+    return value
+
+
+def extract_pdf_text_with_fallback(pdf_bytes):
+    chunks = []
+    raw_streams = re.findall(rb"stream\r?\n(.*?)\r?\nendstream", pdf_bytes, re.S)
+    candidates = [pdf_bytes]
+    for stream in raw_streams:
+        stream = stream.strip(b"\r\n")
+        try:
+            candidates.append(zlib.decompress(stream))
+        except zlib.error:
+            candidates.append(stream)
+
+    for data in candidates:
+        decoded = data.decode("latin-1", errors="ignore")
+        literal_strings = re.findall(r"\(((?:[^()]|\\.){2,})\)", decoded)
+        for item in literal_strings:
+            text = decode_pdf_literal(item)
+            if re.search(r"[A-Za-z가-힣]", text):
+                chunks.append(text)
+        hex_strings = re.findall(r"<([0-9A-Fa-f\s]{8,})>", decoded)
+        for item in hex_strings:
+            compact = re.sub(r"\s+", "", item)
+            try:
+                text = bytes.fromhex(compact).decode("utf-16-be", errors="ignore")
+            except ValueError:
+                continue
+            if re.search(r"[A-Za-z가-힣]", text):
+                chunks.append(text)
+    return clean_text(" ".join(chunks))
+
+
+def extract_pdf_text(pdf_bytes):
+    for module_name in ("pypdf", "PyPDF2"):
+        try:
+            module = __import__(module_name)
+            reader = module.PdfReader(io.BytesIO(pdf_bytes))
+            pages = [page.extract_text() or "" for page in reader.pages]
+            text = clean_text(" ".join(pages))
+            if text:
+                return text
+        except Exception:
+            continue
+    return extract_pdf_text_with_fallback(pdf_bytes)
+
+
+def parse_multipart(body, content_type):
+    boundary_match = re.search(r"boundary=([^;]+)", content_type)
+    if not boundary_match:
+        return {}, {}
+    boundary = boundary_match.group(1).strip().strip('"').encode()
+    fields = {}
+    files = {}
+    for part in body.split(b"--" + boundary):
+        part = part.strip(b"\r\n")
+        if not part or part == b"--" or b"\r\n\r\n" not in part:
+            continue
+        header_bytes, value = part.split(b"\r\n\r\n", 1)
+        headers = header_bytes.decode("utf-8", errors="replace")
+        name_match = re.search(r'name="([^"]+)"', headers)
+        if not name_match:
+            continue
+        name = name_match.group(1)
+        filename_match = re.search(r'filename="([^"]*)"', headers)
+        value = value.rstrip(b"\r\n")
+        if filename_match and filename_match.group(1):
+            files[name] = {"filename": filename_match.group(1), "content": value}
+        else:
+            fields[name] = value.decode("utf-8", errors="replace")
+    return fields, files
+
+
+def tokenize(text):
+    return [token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9+#.]{1,}|[가-힣]{2,}", text)]
+
+
+def vectorize(text):
+    vector = {}
+    for token in tokenize(text):
+        vector[token] = vector.get(token, 0) + 1
+    return vector
+
+
+def cosine_similarity(left, right):
+    if not left or not right:
+        return 0.0
+    dot = sum(value * right.get(key, 0) for key, value in left.items())
+    left_norm = math.sqrt(sum(value * value for value in left.values()))
+    right_norm = math.sqrt(sum(value * value for value in right.values()))
+    if not left_norm or not right_norm:
+        return 0.0
+    return dot / (left_norm * right_norm)
+
+
+def extract_profile_skills(text):
+    lowered = text.lower()
+    skills = []
+    for skill, keywords in SKILL_KEYWORDS.items():
+        if any(keyword.lower() in lowered for keyword in keywords):
+            skills.append(skill)
+    return skills
+
+
+def job_document(job):
+    return " ".join(
+        str(value)
+        for value in [
+            job.get("title", ""),
+            job.get("company", ""),
+            job.get("location", ""),
+            job.get("deadline", ""),
+            job.get("reason", ""),
+            " ".join(job.get("skills", [])),
+        ]
+    )
+
+
+def explain_job_fit(cv_skills, job_skills, similarity):
+    matched = [skill for skill in job_skills if skill in cv_skills]
+    missing = [skill for skill in job_skills if skill not in cv_skills]
+    reasons = []
+    if matched:
+        reasons.append(f"일치 역량: {', '.join(matched[:4])}")
+    if similarity > 0.18:
+        reasons.append("CV 문맥과 공고 설명의 유사도가 높습니다.")
+    if not reasons:
+        reasons.append("직무 키워드가 일부 겹치지만 증거 보강이 필요합니다.")
+    gaps = [GAP_RECOMMENDATIONS.get(skill, f"{skill} 역량을 증명할 결과물을 추가하세요.") for skill in missing[:3]]
+    if not gaps:
+        gaps = ["성과 수치, 배포 링크, 협업 역할을 더 선명하게 적으면 fit이 올라갑니다."]
+    return reasons, gaps
+
+
+def rank_jobs_for_cv(cv_text, jobs, target_role):
+    cv_vector = vectorize(f"{target_role} {cv_text}")
+    cv_skills = extract_profile_skills(cv_text)
+    ranked = []
+    for job in jobs:
+        document = job_document(job)
+        job_vector = vectorize(document)
+        job_skills = list(dict.fromkeys([*job.get("skills", []), *extract_profile_skills(document)]))
+        similarity = cosine_similarity(cv_vector, job_vector)
+        overlap = len(set(cv_skills) & set(job_skills)) / max(len(set(job_skills)), 1)
+        title_bonus = 0.12 if target_role and any(token in document.lower() for token in tokenize(target_role)) else 0
+        score = round(min(98, max(45, 58 + similarity * 55 + overlap * 26 + title_bonus * 100)))
+        reasons, gaps = explain_job_fit(cv_skills, job_skills, similarity)
+        ranked_job = dict(job)
+        ranked_job["fit"] = score
+        ranked_job["similarity"] = round(similarity, 3)
+        ranked_job["matchedSkills"] = [skill for skill in job_skills if skill in cv_skills]
+        ranked_job["missingSkills"] = [skill for skill in job_skills if skill not in cv_skills][:4]
+        ranked_job["fitReasons"] = reasons
+        ranked_job["gaps"] = gaps
+        ranked.append(ranked_job)
+    return sorted(ranked, key=lambda item: item["fit"], reverse=True)
+
+
+def build_cv_summary(cv_text, target_role):
+    skills = extract_profile_skills(cv_text)
+    proof_terms = ["인턴", "수상", "공모전", "해커톤", "논문", "오픈소스", "배포", "github"]
+    proof_count = count_keyword_hits(cv_text, proof_terms)
+    strengths = []
+    gaps = []
+    if skills:
+        strengths.append(f"확인된 핵심 역량: {', '.join(skills[:6])}")
+    if count_keyword_hits(cv_text, ["프로젝트", "project", "개발", "분석", "모델"]):
+        strengths.append("프로젝트 기반 경험을 공고 요구역량과 연결할 수 있습니다.")
+    if proof_count < 2:
+        gaps.append("외부 검증 증거가 부족합니다. 해커톤, 오픈소스, 인턴, 수상 이력을 보강하세요.")
+    if len(cv_text) < 500:
+        gaps.append("CV 텍스트가 짧습니다. 성과 수치, 사용 기술, 결과 링크를 더 넣어야 정확도가 올라갑니다.")
+    return {
+        "targetRole": target_role or "목표 직무 미입력",
+        "extractedCharacters": len(cv_text),
+        "skills": skills,
+        "strengths": strengths or ["목표 직무를 더 구체화하면 강점 포지셔닝이 선명해집니다."],
+        "gaps": gaps or ["기본 증거는 있습니다. 이제 공고별 요구 역량에 맞춰 문장을 재배치하세요."],
+    }
+
+
+def count_keyword_hits(text, keywords):
+    lowered = text.lower()
+    return sum(1 for keyword in keywords if keyword.lower() in lowered)
+
+
+def parse_analyze_request(headers, body):
+    content_type = headers.get("Content-Type", "")
+    if content_type.startswith("multipart/form-data"):
+        fields, files = parse_multipart(body, content_type)
+        target_role = fields.get("target_role", "")
+        pdf_file = files.get("cv_file")
+        cv_text = ""
+        filename = ""
+        if pdf_file:
+            filename = pdf_file["filename"]
+            cv_text = extract_pdf_text(pdf_file["content"])
+        return cv_text, target_role, filename
+
+    payload = json.loads(body.decode("utf-8") or "{}")
+    return payload.get("cv_text", ""), payload.get("target_role", ""), ""
+
 class HICareerHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
@@ -418,6 +661,13 @@ class HICareerHandler(SimpleHTTPRequestHandler):
             self.handle_popular_jobs(parsed_url)
             return
         super().do_GET()
+
+    def do_POST(self):
+        parsed_url = urllib.parse.urlparse(self.path)
+        if parsed_url.path == "/api/analyze-cv":
+            self.handle_analyze_cv()
+            return
+        self.send_error(404, "Not found")
 
     def handle_popular_jobs(self, parsed_url):
         query = urllib.parse.parse_qs(parsed_url.query)
@@ -430,9 +680,49 @@ class HICareerHandler(SimpleHTTPRequestHandler):
         except (urllib.error.URLError, TimeoutError, ElementTree.ParseError, ValueError):
             self.send_json(FALLBACK_JOBS[:limit])
 
-    def send_json(self, payload):
+    def handle_analyze_cv(self):
+        content_length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(content_length)
+
+        try:
+            cv_text, target_role, filename = parse_analyze_request(self.headers, body)
+            if not cv_text.strip():
+                self.send_json(
+                    {
+                        "error": "CV 텍스트를 추출하지 못했습니다. 텍스트 기반 PDF를 업로드하거나 질문 입력을 사용해주세요.",
+                        "rankedJobs": [],
+                    },
+                    status=422,
+                )
+                return
+
+            keyword = target_role or " ".join(extract_profile_skills(cv_text)[:3]) or DEFAULT_JOB_KEYWORD
+            jobs = fetch_popular_jobs(10, keyword)
+            ranked_jobs = rank_jobs_for_cv(cv_text, jobs, target_role)
+            self.send_json(
+                {
+                    "source": "pdf" if filename else "manual",
+                    "filename": filename,
+                    "summary": build_cv_summary(cv_text, target_role),
+                    "rankedJobs": ranked_jobs[:6],
+                }
+            )
+        except (json.JSONDecodeError, ValueError):
+            self.send_json({"error": "요청 형식이 올바르지 않습니다.", "rankedJobs": []}, status=400)
+        except (urllib.error.URLError, TimeoutError, ElementTree.ParseError):
+            ranked_jobs = rank_jobs_for_cv(cv_text, FALLBACK_JOBS, target_role)
+            self.send_json(
+                {
+                    "source": "fallback",
+                    "filename": filename,
+                    "summary": build_cv_summary(cv_text, target_role),
+                    "rankedJobs": ranked_jobs[:6],
+                }
+            )
+
+    def send_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", f"public, max-age={CACHE_TTL_SECONDS}")
         self.send_header("Content-Length", str(len(body)))

@@ -6,10 +6,12 @@ const pdfMode = document.querySelector("#pdfMode");
 const manualMode = document.querySelector("#manualMode");
 const cvFile = document.querySelector("#cvFile");
 const fileName = document.querySelector("#fileName");
+const pdfRoleInput = document.querySelector("#pdfRoleInput");
 const analyzeButton = document.querySelector("#analyzeButton");
 const resultCard = document.querySelector("#resultCard");
+const roleInput = document.querySelector("#roleInput");
 const manualInputs = [
-  document.querySelector("#roleInput"),
+  roleInput,
   document.querySelector("#educationInput"),
   document.querySelector("#projectInput"),
   document.querySelector("#workInput"),
@@ -17,22 +19,9 @@ const manualInputs = [
   document.querySelector("#strengthInput"),
 ];
 
-const keywordGroups = {
-  ai: ["ai", "머신러닝", "딥러닝", "논문", "모델", "python", "pytorch", "데이터"],
-  product: ["기획", "ux", "사용자", "서비스", "pm", "프로덕트", "리서치"],
-  engineering: ["react", "개발", "프론트엔드", "백엔드", "api", "오픈소스", "github", "프로젝트"],
-  proof: ["인턴", "수상", "공모전", "해커톤", "논문", "오픈소스", "배포", "성과"],
-  activity: ["대외활동", "봉사", "동아리", "서포터즈", "운영", "멘토", "리더"],
-};
-
-function countMatches(text, keywords) {
-  const normalizedText = text.toLowerCase();
-  return keywords.filter((keyword) => normalizedText.includes(keyword.toLowerCase())).length;
-}
-
 function getManualText() {
   return manualInputs
-    .map((input) => input.value.trim())
+    .map((input) => input?.value.trim())
     .filter(Boolean)
     .join(" ");
 }
@@ -54,140 +43,127 @@ function resetInputMode() {
   manualMode.classList.remove("active");
 }
 
-function detectTrack(text) {
-  const aiScore = countMatches(text, keywordGroups.ai);
-  const productScore = countMatches(text, keywordGroups.product);
-  const engineeringScore = countMatches(text, keywordGroups.engineering);
-
-  if (aiScore >= productScore && aiScore >= engineeringScore && aiScore > 0) {
-    return "AI·데이터 직무";
-  }
-
-  if (productScore >= engineeringScore && productScore > 0) {
-    return "서비스 기획·PM 직무";
-  }
-
-  if (engineeringScore > 0) {
-    return "소프트웨어 개발 직무";
-  }
-
-  return "신입 성장형 직무";
+function renderMessage(label, title, items = []) {
+  resultCard.innerHTML = `
+    <span class="result-label">${label}</span>
+    <h3>${title}</h3>
+    ${items.length ? `<ul>${items.map((item) => `<li>${item}</li>`).join("")}</ul>` : ""}
+  `;
 }
 
-function buildReport(text) {
-  const track = detectTrack(text);
-  const proofScore = countMatches(text, keywordGroups.proof);
-  const activityScore = countMatches(text, keywordGroups.activity);
-  const aiScore = countMatches(text, keywordGroups.ai);
-  const engineeringScore = countMatches(text, keywordGroups.engineering);
-
-  const strengths = [];
-  const gaps = [];
-  const opportunities = [];
-  const companies = [];
-
-  if (aiScore >= 2) {
-    strengths.push("AI·데이터 키워드가 있어 연구/분석형 포지셔닝을 만들기 좋습니다.");
-    opportunities.push("Kaggle 프로젝트 고도화", "AI 해커톤", "논문 리뷰 스터디");
-    companies.push("AI 스타트업", "헬스케어 AI", "데이터 플랫폼 기업");
-  }
-
-  if (engineeringScore >= 2) {
-    strengths.push("프로젝트와 개발 경험이 보여 실무형 문제 해결력을 어필할 수 있습니다.");
-    opportunities.push("오픈소스 PR", "서비스 배포 프로젝트", "개발자 해커톤");
-    companies.push("B2B SaaS", "플랫폼 기업", "초기 기술 스타트업");
-  }
-
-  if (proofScore < 2) {
-    gaps.push("역량을 증명하는 외부 검증 근거가 부족합니다. 수상, 배포, 인턴, 오픈소스처럼 확인 가능한 결과물을 보강하세요.");
-  }
-
-  if (activityScore < 2) {
-    gaps.push("대외활동·협업 경험이 약하면 조직 적응력 근거가 부족해 보일 수 있습니다. 단, 목표 직무와 연결되는 활동만 추천해야 합니다.");
-    opportunities.push("링커리어 직무 연계 대외활동", "1365/VMS 직무 관련 봉사", "위비티 공모전");
-  }
-
-  if (!strengths.length) {
-    strengths.push("아직 핵심 강점이 흐릿하므로 목표 직무 1개를 정하고 경험을 그 직무 언어로 다시 묶는 것이 우선입니다.");
-  }
-
-  if (!gaps.length) {
-    gaps.push("기본 증거는 충분합니다. 이제 성과 수치, 역할 범위, 결과물 링크를 더 선명하게 만드는 단계입니다.");
-  }
-
-  if (!opportunities.length) {
-    opportunities.push("직무교육형 인턴십", "채용 연계 프로젝트", "포트폴리오 리디자인");
-  }
-
-  if (!companies.length) {
-    companies.push("성장형 중소·중견기업", "직무교육 연계 채용", "신입 온보딩이 강한 스타트업");
-  }
-
-  return {
-    track,
-    strengths,
-    gaps,
-    opportunities: [...new Set(opportunities)],
-    companies: [...new Set(companies)],
-  };
+function renderLoading() {
+  resultCard.innerHTML = `
+    <span class="result-label">분석 중</span>
+    <h3>CV를 읽고 현재 채용공고와 fit을 계산하고 있어요.</h3>
+    <div class="analysis-loading"><span></span><span></span><span></span></div>
+  `;
 }
 
-function renderReport() {
+function renderAnalysis(data) {
+  const summary = data.summary;
+  const rankedJobs = data.rankedJobs || [];
+
+  resultCard.innerHTML = `
+    <span class="result-label">Retrieval Fit 리포트</span>
+    <h3>${summary.targetRole} 기준 추천 공고를 랭킹했습니다.</h3>
+    <div class="summary-grid">
+      <div><strong>${summary.extractedCharacters}</strong><span>추출 문자</span></div>
+      <div><strong>${summary.skills.length}</strong><span>감지 역량</span></div>
+      <div><strong>${rankedJobs.length}</strong><span>추천 공고</span></div>
+    </div>
+    <div class="analysis-block">
+      <h4>강점</h4>
+      <ul>${summary.strengths.map((item) => `<li>${item}</li>`).join("")}</ul>
+    </div>
+    <div class="analysis-block">
+      <h4>보완할 증거</h4>
+      <ul>${summary.gaps.map((item) => `<li>${item}</li>`).join("")}</ul>
+    </div>
+    <div class="ranked-jobs">
+      ${rankedJobs
+        .map(
+          (job, index) => `
+            <article class="ranked-job-card">
+              <div class="job-card-top">
+                <span class="fit high">#${index + 1} Fit ${job.fit}</span>
+                <span class="deadline">${job.deadline}</span>
+              </div>
+              <span class="job-source">${job.source || "검색"}</span>
+              <h4>${job.title}</h4>
+              <p class="company">${job.company}</p>
+              <p class="job-meta">${job.location}</p>
+              <div class="skill-row">${job.skills.map((skill) => `<span>${skill}</span>`).join("")}</div>
+              <ul class="fit-list">
+                ${job.fitReasons.map((reason) => `<li>${reason}</li>`).join("")}
+              </ul>
+              <p class="gap-copy"><strong>보완:</strong> ${job.gaps[0]}</p>
+              <a href="${job.url}" target="_blank" rel="noopener noreferrer">공고 보기</a>
+            </article>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+async function analyzePdf() {
+  const formData = new FormData();
+  formData.append("cv_file", cvFile.files[0]);
+  formData.append("target_role", pdfRoleInput.value.trim());
+
+  const response = await fetch("/api/analyze-cv", {
+    method: "POST",
+    body: formData,
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "PDF 분석에 실패했습니다.");
+  return data;
+}
+
+async function analyzeManual() {
+  const response = await fetch("/api/analyze-cv", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      target_role: roleInput.value.trim(),
+      cv_text: getManualText(),
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "분석에 실패했습니다.");
+  return data;
+}
+
+async function renderReport() {
   const isPdfMode = pdfMode.classList.contains("active");
   const isManualMode = manualMode.classList.contains("active");
 
   if (!isPdfMode && !isManualMode) {
-    resultCard.innerHTML = `
-      <span class="result-label">먼저 선택</span>
-      <h3>CV PDF가 있는지 먼저 알려주세요.</h3>
-      <ul>
-        <li>PDF가 있으면 업로드 화면을, 없으면 질문형 스펙 입력창을 열어드립니다.</li>
-      </ul>
-    `;
+    renderMessage("먼저 선택", "CV PDF가 있는지 먼저 알려주세요.", ["PDF가 있으면 업로드 화면을, 없으면 질문형 스펙 입력창을 열어드립니다."]);
     return;
   }
 
   if (isPdfMode && cvFile.files.length === 0) {
-    resultCard.innerHTML = `
-      <span class="result-label">PDF 대기 중</span>
-      <h3>선택은 완료됐어요. 이제 CV PDF를 업로드해주세요.</h3>
-      <ul>
-        <li>파일이 없다면 “다시 선택” 후 질문 입력 방식으로 진행할 수 있습니다.</li>
-      </ul>
-    `;
+    renderMessage("PDF 대기 중", "선택은 완료됐어요. 이제 CV PDF를 업로드해주세요.", ["목표 직무도 함께 입력하면 공고 검색 정확도가 올라갑니다."]);
     return;
   }
 
-  const text = isPdfMode ? `${cvFile.files[0].name} PDF 이력서 프로젝트 인턴 오픈소스 활동 분석` : getManualText();
-
-  if (!text) {
-    resultCard.innerHTML = `
-      <span class="result-label">입력 필요</span>
-      <h3>질문 입력칸을 하나 이상 채워주세요.</h3>
-      <ul>
-        <li>목표 직무와 프로젝트 경험만 적어도 1차 진단이 가능합니다.</li>
-      </ul>
-    `;
+  if (isManualMode && !getManualText()) {
+    renderMessage("입력 필요", "질문 입력칸을 하나 이상 채워주세요.", ["목표 직무와 프로젝트 경험만 적어도 1차 retrieval fit 분석이 가능합니다."]);
     return;
   }
 
-  const report = buildReport(text);
+  renderLoading();
+  analyzeButton.disabled = true;
 
-  resultCard.innerHTML = `
-    <span class="result-label">증거 격차 리포트</span>
-    <h3>${report.track} 기준으로 다음 성장 전략을 추천합니다.</h3>
-    <ul>
-      <li><strong>강점:</strong> ${report.strengths.join(" ")}</li>
-      <li><strong>부족한 증거:</strong> ${report.gaps.join(" ")}</li>
-      <li><strong>현재 찾을 활동:</strong> ${report.opportunities.join(", ")}</li>
-      <li><strong>유리한 기업군:</strong> ${report.companies.join(", ")}</li>
-      <li><strong>이번 주 액션:</strong> 현재 모집 중인 기회 2개를 고르고, 한 달 안에 CV에 추가할 결과물을 정하세요.</li>
-    </ul>
-    <div class="next-actions">
-      <a class="button secondary" href="report.html">샘플 리포트 보기</a>
-      <a class="button primary" href="opportunities.html">활동 추천 보기</a>
-    </div>
-  `;
+  try {
+    const data = isPdfMode ? await analyzePdf() : await analyzeManual();
+    renderAnalysis(data);
+  } catch (error) {
+    renderMessage("분석 실패", error.message, ["백엔드는 `python3 server.py`로 실행해야 하고, 스캔 PDF는 텍스트 추출이 어려울 수 있습니다."]);
+  } finally {
+    analyzeButton.disabled = false;
+  }
 }
 
 hasPdfButton.addEventListener("click", () => setInputMode("pdf"));
