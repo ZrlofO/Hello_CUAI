@@ -9,9 +9,14 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from xml.etree import ElementTree
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 ROOT = Path(__file__).resolve().parent
 HOST = os.getenv("HOST", "0.0.0.0")
@@ -23,6 +28,7 @@ DEFAULT_JOB_KEYWORD = os.getenv("JOB_SEARCH_KEYWORD", "신입 개발 데이터 A
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
 OPENAI_ENDPOINT = "https://api.openai.com/v1/responses"
+AGENT_PROMPT_DIR = ROOT / "agent_prompts"
 
 _cache = {}
 
@@ -924,6 +930,9 @@ def parse_json_object(text_value):
     try:
         return json.loads(text_value)
     except json.JSONDecodeError:
+        fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text_value, re.IGNORECASE)
+        if fenced:
+            return json.loads(fenced.group(1))
         match = re.search(r"\{[\s\S]*\}", text_value)
         if not match:
             raise
@@ -1014,7 +1023,590 @@ def safe_llm_report(cv_text, summary, ranked_jobs, agent):
     try:
         return call_openai_llm_report(cv_text, summary, ranked_jobs, agent)
     except Exception as exc:
-        return {"error": f"LLM report unavailable: {exc.__class__.__name__}"}
+        return {"error": "LLM 리포트를 생성하지 못해 기본 분석 결과를 표시합니다."}
+
+
+SUPPORTING_AGENT_CONFIG = {
+    "project_and_career": {
+        "name": "Project & Career Experience Agent",
+        "prompt_file": "project_and_career.md",
+        "metadata_keys": ["projects_and_experience", "awards", "skills"],
+        "benchmark_keys": ["core_requirements", "minimum_viable_profile", "strong_profile_signals", "common_rejection_risks"],
+        "role": (
+            "너는 Project & Career Experience Agent입니다. 프로젝트, 대외활동, 인턴, 연구, 공모전, 실무 경험을 "
+            "Consult Agent가 제공한 benchmark 기준으로 검토해주세요."
+        ),
+        "task": (
+            "활동명, 기간, 기관, 본인 역할, 수행 내용, 성과가 명확한지 확인하고, 목표 직무 기준에서 충족되는 점과 "
+            "부족한 점을 준비 기간 안에서 보완 가능한 방식으로 제안해주세요."
+        ),
+    },
+    "leadership_and_contribution": {
+        "name": "Leadership & Contribution Agent",
+        "prompt_file": "leadership_and_contribution.md",
+        "metadata_keys": ["leadership_and_volunteering", "projects_and_experience"],
+        "benchmark_keys": ["core_requirements", "common_preferred_requirements", "common_rejection_risks"],
+        "role": (
+            "너는 Leadership & Contribution Agent입니다. 리더십, 팀워크, 조직 경험, 봉사, 멘토링, 커뮤니티 활동이 "
+            "목표 직무의 협업/소통/책임감 기준을 충족하는지 검토해주세요."
+        ),
+        "task": (
+            "직함만 보지 말고 실제 역할, 기여, 협업 근거, 팀 규모, 기간, 의사결정 경험이 보이는지 확인해주세요."
+        ),
+    },
+    "language_and_credential": {
+        "name": "Language & Credential Agent",
+        "prompt_file": "language_and_credential.md",
+        "metadata_keys": ["languages_and_certificates", "skills", "projects_and_experience", "education"],
+        "benchmark_keys": ["core_requirements", "common_preferred_requirements", "minimum_viable_profile", "common_rejection_risks"],
+        "role": (
+            "너는 Language & Credential Agent입니다. 어학, 자격증, 수료증, 교육 이수, 툴 역량이 목표 직무 기준에서 "
+            "최소 검증 신호로 충분한지 검토해주세요."
+        ),
+        "task": (
+            "명시된 어학/자격증/교육/기술만 사용하고, 자격증보다 프로젝트가 중요한 직무라면 그 점도 Consult Agent에게 알려주세요."
+        ),
+    },
+    "cv_positioning": {
+        "name": "CV Positioning & Expression Agent",
+        "prompt_file": "cv_positioning.md",
+        "metadata_keys": ["education", "projects_and_experience", "awards", "leadership_and_volunteering", "languages_and_certificates", "skills", "other"],
+        "benchmark_keys": ["core_requirements", "strong_profile_signals", "common_rejection_risks"],
+        "role": (
+            "너는 CV Positioning & Expression Agent입니다. CV 전체 구조, 문장 표현, 직무 포지셔닝, 성과 표현, "
+            "ATS 친화성을 검토해주세요."
+        ),
+        "task": (
+            "새로운 경험을 만들지 말고, metadata에 있는 정보를 목표 직무에 더 설득력 있게 보이도록 표현 방향을 제안해주세요."
+        ),
+    },
+}
+
+
+def load_agent_prompt(filename):
+    return (AGENT_PROMPT_DIR / filename).read_text(encoding="utf-8").strip()
+
+
+LEADING_AGENT_PROMPT = load_agent_prompt("leading_agent.md")
+CONSULT_AGENT_PROMPT = load_agent_prompt("consult_agent.md")
+SUPPORTING_COMMON_PROMPT = load_agent_prompt("supporting_common.md")
+JSON_REPAIR_PROMPT = load_agent_prompt("json_repair.md")
+
+
+def repair_openai_json(raw_text, expected_schema, context_label="agent output"):
+    system_prompt = JSON_REPAIR_PROMPT
+    user_prompt = {
+        "context_label": context_label,
+        "expected_schema": expected_schema,
+        "invalid_output": raw_text[:12000],
+        "repair_rules": [
+            "Preserve the original Korean content as much as possible.",
+            "If a required field is missing, use an empty string, empty array, or empty object matching the schema.",
+            "Return one JSON object only.",
+        ],
+    }
+    return call_openai_json(system_prompt, user_prompt, max_output_tokens=1800, timeout=30, allow_repair=False)
+
+
+def call_openai_json(system_prompt, user_prompt, max_output_tokens=1800, timeout=40, allow_repair=True):
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY가 필요합니다.")
+
+    request_payload = {
+            "model": OPENAI_MODEL,
+            "input": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(user_prompt, ensure_ascii=False)},
+            ],
+            "text": {"format": {"type": "json_object"}},
+            "max_output_tokens": max_output_tokens,
+    }
+
+    def send_request(payload):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            OPENAI_ENDPOINT,
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    try:
+        payload = send_request(request_payload)
+    except urllib.error.HTTPError as exc:
+        if exc.code not in (400, 422):
+            raise
+        request_payload.pop("text", None)
+        payload = send_request(request_payload)
+    raw_text = response_output_text(payload)
+    try:
+        return parse_json_object(raw_text)
+    except json.JSONDecodeError:
+        if not allow_repair:
+            raise
+        return repair_openai_json(raw_text, user_prompt.get("required_output_format") or user_prompt.get("output_schema") or {}, "openai_json_response")
+
+
+def job_context_for_feedback(ranked_jobs):
+    return [
+        {
+            "title": job.get("title", ""),
+            "company": job.get("company", ""),
+            "fit": job.get("fit", 0),
+            "skills": job.get("skills", []),
+            "fitReasons": job.get("fitReasons", []),
+            "gaps": job.get("gaps", []),
+        }
+        for job in ranked_jobs[:10]
+    ]
+
+
+def select_metadata_for_agent(metadata, keys):
+    metadata = metadata if isinstance(metadata, dict) else {}
+    return {key: metadata.get(key, []) for key in keys}
+
+
+def select_benchmark_for_agent(benchmark, keys):
+    benchmark = benchmark if isinstance(benchmark, dict) else {}
+    return {key: benchmark.get(key, []) for key in keys}
+
+
+def normalize_conversation_log(log):
+    normalized = []
+    for item in log or []:
+        if not isinstance(item, dict):
+            continue
+        normalized.append(
+            {
+                "from": clean_text(item.get("from", "")),
+                "to": clean_text(item.get("to", "")),
+                "message": clean_text(item.get("message", "")),
+            }
+        )
+    return [item for item in normalized if item["from"] and item["to"] and item["message"]]
+
+
+def call_consult_agent_plan(metadata, preferences, ranked_jobs):
+    system_prompt = (
+        CONSULT_AGENT_PROMPT
+        + "\n\n"
+        "목표 직무 benchmark를 만들고, 어떤 Supporting Agent를 호출할지 보수적으로 선택해주세요. "
+        "웹 크롤링은 아직 사용하지 않으므로 제공된 상위 공고 후보와 metadata만 기준으로 삼아주세요. "
+        "Return JSON only."
+    )
+    user_prompt = {
+        "metadata": metadata,
+        "preferences": preferences,
+        "ranked_job_candidates": job_context_for_feedback(ranked_jobs),
+        "available_supporting_agents": [
+            {"key": key, "name": config["name"], "metadata_scope": config["metadata_keys"]}
+            for key, config in SUPPORTING_AGENT_CONFIG.items()
+        ],
+        "selection_rules": [
+            "CV Positioning & Expression Agent는 항상 호출해주세요.",
+            "관련 항목이 비어 있거나 구체성이 부족하면 호출해주세요.",
+            "활동 경력이 적당히 충분해 보여도 보수적으로 보완 가능성이 있으면 호출해주세요.",
+            "호출하지 않는 Agent가 있다면 conversation_log에 이유를 남겨주세요.",
+        ],
+        "output_schema": {
+            "benchmark": {
+                "target_role": "string",
+                "core_requirements": ["string"],
+                "common_preferred_requirements": ["string"],
+                "minimum_viable_profile": ["string"],
+                "strong_profile_signals": ["string"],
+                "common_rejection_risks": ["string"],
+            },
+            "activated_agents": [{"agent_key": "string", "agent_name": "string", "reason": "string"}],
+            "conversation_log": [{"from": "Consult Agent", "to": "Supporting Agent", "message": "string"}],
+        },
+    }
+    result = call_openai_json(system_prompt, user_prompt, max_output_tokens=2200)
+    activated = []
+    valid_keys = set(SUPPORTING_AGENT_CONFIG)
+    for item in result.get("activated_agents", []):
+        key = item.get("agent_key", "")
+        if key in valid_keys:
+            activated.append(
+                {
+                    "agent_key": key,
+                    "agent_name": SUPPORTING_AGENT_CONFIG[key]["name"],
+                    "reason": clean_text(item.get("reason", "")),
+                }
+            )
+    if not any(item["agent_key"] == "cv_positioning" for item in activated):
+        activated.append(
+            {
+                "agent_key": "cv_positioning",
+                "agent_name": SUPPORTING_AGENT_CONFIG["cv_positioning"]["name"],
+                "reason": "CV 전체 구조와 표현은 항상 검토해야 하므로 호출했습니다.",
+            }
+        )
+    return {
+        "benchmark": result.get("benchmark", {}),
+        "activated_agents": activated,
+        "conversation_log": normalize_conversation_log(result.get("conversation_log", [])),
+    }
+
+
+def call_supporting_agent(agent_key, metadata, preferences, benchmark, cv_text):
+    config = SUPPORTING_AGENT_CONFIG[agent_key]
+    agent_prompt = load_agent_prompt(config["prompt_file"])
+    scoped_metadata = select_metadata_for_agent(metadata, config["metadata_keys"])
+    scoped_benchmark = select_benchmark_for_agent(benchmark, config["benchmark_keys"])
+    system_prompt = (
+        SUPPORTING_COMMON_PROMPT
+        + "\n\n"
+        + agent_prompt
+    )
+    user_prompt = {
+        "instruction_from_consult_agent": config["task"],
+        "target_role": preferences.get("target_role", ""),
+        "preparation_period": preferences.get("preparation_period", ""),
+        "additional_user_input": preferences.get("additional_user_input", ""),
+        "benchmark": scoped_benchmark,
+        "metadata": scoped_metadata,
+        "cv_text": compact_for_prompt(cv_text, 6500) if agent_key == "cv_positioning" else "",
+        "required_output_format": {
+            "agent_name": config["name"],
+            "observed_information": {},
+            "assessment": {
+                "fulfilled_requirements": ["string"],
+                "missing_or_weak_requirements": ["string"],
+                "unclear_points": ["string"],
+            },
+            "recommendations": [
+                {
+                    "gap": "string",
+                    "recommended_action": "string",
+                    "reason": "string",
+                    "time_fit": "string",
+                }
+            ],
+            "message_to_consult_agent": {
+                "needs_review": True,
+                "specific_question": "string",
+            },
+            "conversation_message": {
+                "from": config["name"],
+                "to": "Consult Agent",
+                "message": "string",
+            },
+        },
+    }
+    result = call_openai_json(system_prompt, user_prompt, max_output_tokens=2200)
+    result["agent_name"] = result.get("agent_name") or config["name"]
+    return result
+
+
+def fallback_supporting_review(agent_key, exc):
+    config = SUPPORTING_AGENT_CONFIG[agent_key]
+    return {
+        "agent_name": config["name"],
+        "observed_information": {},
+        "assessment": {
+            "fulfilled_requirements": [],
+            "missing_or_weak_requirements": [
+                "해당 Agent의 검토 결과를 구조화하지 못해 이 항목은 보수적으로 gap으로 유지했습니다."
+            ],
+            "unclear_points": [
+                "Agent 검토 근거가 충분히 구조화되지 않았습니다."
+            ],
+        },
+        "recommendations": [
+            {
+                "gap": "Agent 응답 형식",
+                "recommended_action": "metadata 근거와 benchmark 항목을 짧고 명확한 JSON 구조로 다시 검토해야 합니다.",
+                "reason": "Consult Agent가 자연어 오류 메시지가 아니라 구조화된 검토 결과를 받아야 합니다.",
+                "time_fit": "즉시 수정 가능",
+            }
+        ],
+        "message_to_consult_agent": {
+            "needs_review": True,
+            "specific_question": "응답 형식 복구에 실패했습니다. 해당 항목은 보수적으로 gap으로 유지해주세요.",
+        },
+        "conversation_message": {
+            "from": config["name"],
+            "to": "Consult Agent",
+            "message": "검토 근거가 충분히 구조화되지 않았습니다. metadata 근거가 확인된 항목만 보수적으로 반영해주세요.",
+        },
+        "error": "검토 결과를 구조화하지 못했습니다.",
+    }
+
+
+def call_supporting_agent_revision(agent_key, metadata, preferences, benchmark, cv_text, original_review, revision_request):
+    config = SUPPORTING_AGENT_CONFIG[agent_key]
+    agent_prompt = load_agent_prompt(config["prompt_file"])
+    scoped_metadata = select_metadata_for_agent(metadata, config["metadata_keys"])
+    scoped_benchmark = select_benchmark_for_agent(benchmark, config["benchmark_keys"])
+    system_prompt = (
+        SUPPORTING_COMMON_PROMPT
+        + "\n\n"
+        + agent_prompt
+        + "\n\nConsult Agent가 1차 결과를 검토한 뒤 재검토를 요청했습니다. 기존 답변을 방어하지 말고, 요청된 기준에 맞게 더 구체적으로 수정해주세요."
+    )
+    user_prompt = {
+        "revision_request_from_consult_agent": revision_request,
+        "original_review": original_review,
+        "target_role": preferences.get("target_role", ""),
+        "preparation_period": preferences.get("preparation_period", ""),
+        "benchmark": scoped_benchmark,
+        "metadata": scoped_metadata,
+        "cv_text": compact_for_prompt(cv_text, 6500) if agent_key == "cv_positioning" else "",
+        "required_output_format": {
+            "agent_name": config["name"],
+            "observed_information": {},
+            "assessment": {
+                "fulfilled_requirements": ["string"],
+                "missing_or_weak_requirements": ["string"],
+                "unclear_points": ["string"],
+            },
+            "recommendations": [
+                {
+                    "gap": "string",
+                    "recommended_action": "string",
+                    "reason": "string",
+                    "time_fit": "string",
+                }
+            ],
+            "message_to_consult_agent": {
+                "needs_review": False,
+                "specific_question": "string",
+            },
+            "conversation_message": {
+                "from": config["name"],
+                "to": "Consult Agent",
+                "message": "string",
+            },
+        },
+    }
+    result = call_openai_json(system_prompt, user_prompt, max_output_tokens=2200)
+    result["agent_name"] = result.get("agent_name") or config["name"]
+    result["revision_of"] = original_review.get("agent_name", config["name"]) if isinstance(original_review, dict) else config["name"]
+    return result
+
+
+def call_consult_agent_review(metadata, preferences, ranked_jobs, plan, supporting_reviews, allow_revisions=True, prior_review=None):
+    system_prompt = (
+        CONSULT_AGENT_PROMPT
+        + "\n\n"
+        "Supporting Agent들의 1차 결과를 검토하고 최종 통합해주세요. "
+        "결과가 일반론이거나 benchmark와 약하게 연결되어 있으면 어떤 Agent에게 무엇을 다시 요청할지 정해주세요. "
+        "안정 판정은 매우 엄격하게 하세요. 대화 문장은 사람이 말하듯 자연스럽고 정중하게 작성해주세요. Return JSON only."
+    )
+    user_prompt = {
+        "metadata": metadata,
+        "preferences": preferences,
+        "ranked_job_candidates": job_context_for_feedback(ranked_jobs),
+        "benchmark": plan.get("benchmark", {}),
+        "activated_agents": plan.get("activated_agents", []),
+        "supporting_reviews": supporting_reviews,
+        "prior_consult_review": prior_review or {},
+        "allow_revision_requests": allow_revisions,
+        "review_rules": [
+            "metadata 근거 없이 추론한 내용은 최종 결과에 반영하지 마세요.",
+            "준비 기간 안에 실행하기 어려운 계획은 낮은 우선순위로 내리거나 제외하세요.",
+            "stable은 핵심 요구사항 대부분이 구체적 근거로 충족될 때만 부여하세요.",
+            "내부 오류명이나 파싱 실패 표현을 사용자 대화나 Agent 대화에 쓰지 마세요.",
+            "응답 형식 문제가 있는 Agent는 '검토 근거가 부족합니다'처럼 사용자에게 이해되는 표현으로 바꿔주세요.",
+            "allow_revision_requests가 true이면 필요한 재검토 요청을 revision_requests에 남겨주세요.",
+            "allow_revision_requests가 false이면 추가 재검토를 요청하지 말고 최종 통합만 해주세요.",
+            "각 Supporting Agent에게 검토 완료 또는 재검토 요청 메시지를 conversation_log에 남겨주세요.",
+        ],
+        "output_schema": {
+            "agent_reviews": {},
+            "revision_requests": [{"agent_key": "string", "to": "string", "message": "string"}],
+            "final_classification": {
+                "status": "stable | moderate_risk | high_risk | misaligned",
+                "reason": ["string"],
+            },
+            "priority_gaps": ["string"],
+            "recommended_focus": ["string"],
+            "handoff_to_leading_agent": "string",
+            "conversation_log": [{"from": "Consult Agent", "to": "string", "message": "string"}],
+        },
+    }
+    return call_openai_json(system_prompt, user_prompt, max_output_tokens=2600)
+
+
+def call_leading_agent_final(metadata, preferences, consult_result):
+    system_prompt = (
+        LEADING_AGENT_PROMPT
+        + "\n\n"
+        "직접 세부 항목을 재평가하지 말고 Consult Agent의 결과를 받아 "
+        "사용자에게 보여줄 최종 보고서로 통합해주세요. 준비 기간 안에서 실행하기 어려운 계획은 최종안에 넣지 마세요. "
+        "안정/위험 분류를 느슨하게 하지 마세요. 문장은 사람이 말하듯 자연스럽고 정중하게 작성해주세요. Return JSON only."
+    )
+    user_prompt = {
+        "metadata": metadata,
+        "preferences": preferences,
+        "consult_result": consult_result,
+        "output_schema": {
+            "final_report": {
+                "target_role": "string",
+                "preparation_period": "string",
+                "overall_status": "string",
+                "summary": "string",
+                "key_strengths": ["string"],
+                "critical_gaps": ["string"],
+                "agent_feedback_summary": {},
+                "recommended_strategy": ["string"],
+                "next_actions": ["string"],
+            },
+            "conversation_log": [{"from": "Leading Agent", "to": "Consult Agent", "message": "string"}],
+        },
+    }
+    return call_openai_json(system_prompt, user_prompt, max_output_tokens=2200)
+
+
+def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
+    if not OPENAI_API_KEY:
+        return {"error": "OPENAI_API_KEY가 없어 Feedback Loop를 실행하지 못했습니다."}
+
+    def emit_event(event, payload):
+        if emit:
+            emit(event, payload)
+
+    conversation_log = [
+        {
+            "from": "Leading Agent",
+            "to": "Consult Agent",
+            "message": "사용자의 metadata와 선호 정보를 전달드립니다. 목표 직무 기준으로 benchmark를 만들고, 필요한 Supporting Agent를 보수적으로 선택해주세요.",
+        }
+    ]
+    emit_event("conversation", conversation_log[-1])
+    emit_event("status", {"message": "Consult Agent가 benchmark와 호출할 Supporting Agent를 정하고 있습니다."})
+    plan = call_consult_agent_plan(metadata, preferences, ranked_jobs)
+    conversation_log.extend(plan.get("conversation_log", []))
+    for message in plan.get("conversation_log", []):
+        emit_event("conversation", message)
+    emit_event("agents_selected", {"activatedAgents": plan.get("activated_agents", []), "benchmark": plan.get("benchmark", {})})
+
+    supporting_reviews = {}
+    emit_event("status", {"message": "선택된 Supporting Agent들이 병렬로 1차 검토를 시작했습니다."})
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(plan["activated_agents"])))) as executor:
+        futures = {
+            executor.submit(call_supporting_agent, item["agent_key"], metadata, preferences, plan["benchmark"], cv_text): item
+            for item in plan["activated_agents"]
+        }
+        for future in as_completed(futures):
+            item = futures[future]
+            try:
+                review = future.result()
+            except Exception as exc:
+                review = fallback_supporting_review(item["agent_key"], exc)
+            supporting_reviews[item["agent_key"]] = review
+            message = review.get("conversation_message") if isinstance(review, dict) else None
+            if isinstance(message, dict):
+                normalized_messages = normalize_conversation_log([message])
+                conversation_log.extend(normalized_messages)
+                for normalized_message in normalized_messages:
+                    emit_event("conversation", normalized_message)
+            else:
+                fallback_message = {
+                    "from": item["agent_name"],
+                    "to": "Consult Agent",
+                    "message": "담당 범위의 1차 검토 결과를 전달드립니다. Consult Agent의 검토를 요청드립니다.",
+                }
+                conversation_log.append(fallback_message)
+                emit_event("conversation", fallback_message)
+            emit_event("supporting_review", {"agentKey": item["agent_key"], "review": review})
+
+    emit_event("status", {"message": "Consult Agent가 Supporting Agent들의 1차 결과를 검토하고 있습니다."})
+    first_consult_review = call_consult_agent_review(metadata, preferences, ranked_jobs, plan, supporting_reviews, allow_revisions=True)
+    conversation_log.extend(normalize_conversation_log(first_consult_review.get("conversation_log", [])))
+    for message in normalize_conversation_log(first_consult_review.get("conversation_log", [])):
+        emit_event("conversation", message)
+
+    revision_requests = [
+        request for request in first_consult_review.get("revision_requests", [])
+        if isinstance(request, dict) and request.get("agent_key") in supporting_reviews
+    ][:4]
+    if revision_requests:
+        emit_event("status", {"message": "Consult Agent가 일부 Agent에게 재검토를 요청했습니다."})
+        with ThreadPoolExecutor(max_workers=min(4, len(revision_requests))) as executor:
+            futures = {
+                executor.submit(
+                    call_supporting_agent_revision,
+                    request["agent_key"],
+                    metadata,
+                    preferences,
+                    plan["benchmark"],
+                    cv_text,
+                    supporting_reviews.get(request["agent_key"], {}),
+                    request,
+                ): request
+                for request in revision_requests
+            }
+            for future in as_completed(futures):
+                request = futures[future]
+                agent_key = request["agent_key"]
+                conversation_log.append(
+                    {
+                        "from": "Consult Agent",
+                        "to": SUPPORTING_AGENT_CONFIG[agent_key]["name"],
+                        "message": clean_text(request.get("message", "결과를 더 구체적으로 재검토해주세요.")),
+                    }
+                )
+                emit_event("conversation", conversation_log[-1])
+                try:
+                    revised_review = future.result()
+                    supporting_reviews[agent_key] = revised_review
+                    message = revised_review.get("conversation_message") if isinstance(revised_review, dict) else None
+                    if isinstance(message, dict):
+                        normalized_messages = normalize_conversation_log([message])
+                        conversation_log.extend(normalized_messages)
+                        for normalized_message in normalized_messages:
+                            emit_event("conversation", normalized_message)
+                    emit_event("supporting_review", {"agentKey": agent_key, "review": revised_review})
+                except Exception as exc:
+                    revised_review = fallback_supporting_review(agent_key, exc)
+                    revised_review["revision_note"] = "재검토 결과를 구조화하지 못해 보수적으로 gap으로 유지했습니다."
+                    supporting_reviews[agent_key] = revised_review
+                    emit_event("supporting_review", {"agentKey": agent_key, "review": revised_review})
+
+    emit_event("status", {"message": "Consult Agent가 최종 통합 결과를 정리하고 있습니다."})
+    consult_review = call_consult_agent_review(
+        metadata,
+        preferences,
+        ranked_jobs,
+        plan,
+        supporting_reviews,
+        allow_revisions=False,
+        prior_review=first_consult_review,
+    )
+    conversation_log.extend(normalize_conversation_log(consult_review.get("conversation_log", [])))
+    for message in normalize_conversation_log(consult_review.get("conversation_log", [])):
+        emit_event("conversation", message)
+    emit_event("consult_result", consult_review)
+    emit_event("status", {"message": "Leading Agent가 사용자용 최종 보고서로 정리하고 있습니다."})
+    leading_final = call_leading_agent_final(metadata, preferences, consult_review)
+    conversation_log.extend(normalize_conversation_log(leading_final.get("conversation_log", [])))
+    for message in normalize_conversation_log(leading_final.get("conversation_log", [])):
+        emit_event("conversation", message)
+
+    return {
+        "mode": "multi_call",
+        "benchmark": plan.get("benchmark", {}),
+        "activatedAgents": plan.get("activated_agents", []),
+        "supportingReviews": supporting_reviews,
+        "firstConsultReview": first_consult_review,
+        "consultResult": consult_review,
+        "leadingReport": leading_final.get("final_report", {}),
+        "conversationLog": conversation_log,
+    }
+
+
+def safe_feedback_loop(cv_text, metadata, preferences, ranked_jobs):
+    try:
+        return build_feedback_loop(cv_text, metadata, preferences, ranked_jobs)
+    except Exception as exc:
+        return {"error": "Feedback Loop를 완료하지 못했습니다. metadata를 확인한 뒤 다시 실행해주세요."}
 
 
 
@@ -1030,67 +1622,143 @@ def ensure_bullet_text(value):
     return "\n".join(f"- {line.lstrip('-• ').strip()}" for line in lines)
 
 
+def load_metadata_contract():
+    with open(ROOT / "metadata_schema.json", "r", encoding="utf-8") as schema_file:
+        return json.load(schema_file)
+
+
+METADATA_CONTRACT = load_metadata_contract()
+METADATA_SCHEMA = {
+    category: list(config.get("fields", {}).keys())
+    for category, config in METADATA_CONTRACT["categories"].items()
+}
+SUBJECTIVE_METADATA_PATTERNS = [
+    "확인 필요",
+    "확인이 필요",
+    "구체적인 URL",
+    "기재되어 있으나",
+    "명시되어 있으나",
+    "추정",
+    "보완 필요",
+    "보완이 필요",
+    "확실하지 않",
+    "불명",
+]
+
+
+def clean_metadata_item(category, item):
+    if not isinstance(item, dict):
+        raw_text = clean_text(str(item or ""))
+        return {field: raw_text if field in ("raw_text", "content", "description") else "" for field in METADATA_SCHEMA[category]}
+    return {field: clean_text(item.get(field, "")) for field in METADATA_SCHEMA[category]}
+
+
+def contains_subjective_metadata(value):
+    return any(pattern in value for pattern in SUBJECTIVE_METADATA_PATTERNS)
+
+
+def has_explicit_url(value):
+    return bool(re.search(r"https?://|www\.|github\.com/|linkedin\.com/", value, re.IGNORECASE))
+
+
+def remove_subjective_metadata_items(category, items):
+    filtered = []
+    for item in items:
+        item_text = " ".join(value for value in item.values() if value)
+        if contains_subjective_metadata(item_text):
+            continue
+        if re.search(r"github|linked\s*in|linkedin|portfolio", item_text, re.IGNORECASE) and not has_explicit_url(item_text):
+            continue
+        filtered.append(item)
+    return filtered
+
+
+def infer_education_fields(item):
+    raw_text = item.get("raw_text", "")
+    source_text = " ".join(value for value in [raw_text, item.get("school", ""), item.get("degree", ""), item.get("major", ""), item.get("period", "")] if value)
+
+    if not item.get("school"):
+        school_match = re.search(r"([가-힣A-Za-z\s]+?(?:대학교|대학|University))", source_text)
+        if school_match:
+            item["school"] = clean_text(school_match.group(1))
+
+    if not item.get("degree"):
+        if re.search(r"학사|Bachelor|B\.S\.|B\.A\.", source_text, re.IGNORECASE):
+            item["degree"] = "학사"
+        elif re.search(r"석사|Master|M\.S\.|M\.A\.", source_text, re.IGNORECASE):
+            item["degree"] = "석사"
+        elif re.search(r"박사|Ph\.?D|Doctor", source_text, re.IGNORECASE):
+            item["degree"] = "박사"
+
+    if not item.get("major"):
+        major_match = re.search(r"(?:대학교|대학|University)\s*([가-힣A-Za-z\s]+?)(?:학사|석사|박사|Bachelor|Master|Ph\.?D|과정|전공)", source_text, re.IGNORECASE)
+        if major_match:
+            item["major"] = re.sub(r"\s+", " ", clean_text(major_match.group(1)))
+
+    if not item.get("period"):
+        period_match = re.search(
+            r"(\d{4}\s*년\s*\d{1,2}\s*월)\s*(?:부터|~|-|–|—|to)\s*(\d{4}\s*년\s*\d{1,2}\s*월|현재|present)",
+            source_text,
+            re.IGNORECASE,
+        )
+        if period_match:
+            item["period"] = f"{clean_text(period_match.group(1))} - {clean_text(period_match.group(2))}"
+
+    return item
+
+
+def normalize_metadata(metadata):
+    normalized = {}
+    metadata = metadata if isinstance(metadata, dict) else {}
+    for category, fields in METADATA_SCHEMA.items():
+        items = metadata.get(category, [])
+        if isinstance(items, dict):
+            items = [items]
+        if not isinstance(items, list):
+            items = []
+        cleaned_items = [clean_metadata_item(category, item) for item in items]
+        if category == "education":
+            cleaned_items = [infer_education_fields(item) for item in cleaned_items]
+        cleaned_items = remove_subjective_metadata_items(category, cleaned_items)
+        normalized[category] = [item for item in cleaned_items if any(item.get(field) for field in fields)]
+    return normalized
+
+
+def metadata_to_text(metadata):
+    lines = []
+    for category, items in metadata.items():
+        for item in items:
+            values = [value for key, value in item.items() if key != "raw_text" and value]
+            if not values and item.get("raw_text"):
+                values = [item["raw_text"]]
+            if values:
+                lines.append(f"{category}: " + " / ".join(values))
+    return "\n".join(lines)
+
+
 def call_openai_pdf_field_mapping(pdf_bytes, filename, target_role=""):
     if not OPENAI_API_KEY:
         raise ValueError("OPENAI_API_KEY가 필요합니다. LLM으로 PDF를 읽으려면 서버 실행 시 API 키를 설정해주세요.")
 
     encoded_pdf = base64.b64encode(pdf_bytes).decode("ascii")
     system_prompt = (
-        "You are HICAREER, a Korean CV restructuring agent. Read the attached PDF directly. "
-        "Your job is NOT raw OCR transcription. Your job is to rewrite the CV into clean Korean bullet points for editable form fields. "
-        "Do not invent facts. Preserve concrete institutions, venues, years, awards, ranks, metrics, and research topics. "
-        "Every field except targetRole and rawSummary must contain Korean bullet points only. Return JSON only."
+        "You are HICAREER, a CV metadata extraction agent. "
+        "Read the attached PDF and fill the exact metadata JSON contract used by the app. "
+        "This is data entry into a schema, not summarization, advice, or interpretation. "
+        "Return JSON only."
     )
-    few_shot_example = {
-        "bad_raw_input_style": "Research Experience Computer Vision&Machine Learning Lab,KAIST Jun2026–Present Research Intern... Publications QuerytheRelevant,DiversifytheContext... Honors&Awards BestExcellenceAward...",
-        "good_output_style": {
-            "work": [
-                "KAIST Computer Vision & Machine Learning Lab 연구 인턴으로 3D-aware Vision-Language Model, 악천후 환경 인지, physical grounding 및 신뢰 가능한 embodied intelligence 연구 수행",
-                "중앙대학교 MULTI Lab 연구 인턴으로 Large Vision-Language Model의 효율적 추론과 vision-language representation 분석 연구 수행",
-                "질의 연관성을 반영한 visual-token pruning 기법과 projector-space에서의 token 역할 분석 방법론 설계",
-                "다양한 LVLM과 multimodal benchmark를 활용한 visual-token 선택·분석 파이프라인 구축 및 성능 평가"
-            ],
-            "projects": [
-                "VLM의 context-aware token pruning 연구를 수행하여 ECCV 2026 논문 게재 확정",
-                "의료 진단을 위한 gated distillation 및 decoupled learning 연구를 수행하고 ICTC 2025 논문 게재 및 교내 학술대회 최우수 논문상 수상",
-                "실시간 자율주행 인지를 위한 효율적 2D BEV fusion 프레임워크를 개발하고 ICTC 2025 논문 게재 및 우수 논문상 수상",
-                "Vision-Language Model의 projector-space modality alignment와 token 역할 형성 과정을 분석한 연구를 NeurIPS 2026에 제출"
-            ],
-            "activity": [
-                "중앙대학교 AI 학회 CUAI 회장으로 학술 프로그램, 연구 활동 및 커뮤니티 운영 총괄",
-                "NIPA 지원사업 제안서를 주도하여 KT Cloud GPU 자원 A100 2대와 V100 2대를 확보하고 학회 연구·개발을 위한 GPU 서버 운영 체계 구축"
-            ],
-            "strength": [
-                "전공 평점 4.40/4.50, 전공 석차 2위를 기록하고 Dean’s List 및 성적 우수 장학금 다수 수혜",
-                "논문 게재, 학회 발표, 해커톤 수상, 리더보드 성과를 통해 연구 역량과 외부 검증 근거를 함께 보유"
-            ]
-        }
-    }
     user_prompt = {
         "target_role": target_role,
+        "metadata_contract": METADATA_CONTRACT,
         "instructions": [
-            "PDF를 직접 읽고 입력칸에 들어갈 내용을 한국어 bullet point로 재작성해줘.",
-            "원문을 그대로 붙여넣지 말고, 채용 담당자가 보기 좋은 CV bullet로 정제해줘.",
-            "각 bullet은 동사/성과 중심으로 1문장 작성하고, 가능한 경우 기관·역할·기술·성과·연도·순위·학회명을 포함해줘.",
-            "붙어 있는 PDF 텍스트를 자연스럽게 복원해줘. 예: CandidateinArtificialIntelligence → Artificial Intelligence 전공 학부생.",
-            "education에는 학력, GPA, 석차, 장학을 정리해줘.",
-            "projects에는 논문, 연구 프로젝트, 오픈소스, 대회 모델 개발을 정리해줘.",
-            "work에는 인턴, 연구실 경험, 실무 역할과 기여를 정리해줘.",
-            "activity에는 리더십, 학회 운영, 대외활동, 수상, 봉사, 공모전을 정리해줘.",
-            "strength에는 목표 직무 관점에서 가져갈 핵심 강점만 정리해줘.",
-            "extra에는 링크, 언어점수, 빠진 기술스택, 확인이 필요한 세부사항을 정리해줘.",
+            "metadata_contract.response_shape와 metadata_contract.categories에 정의된 category/field 이름만 사용해.",
+            "CV 안의 정보를 metadata_contract.categories의 설명에 맞게 가능한 한 많이 채워.",
+            "원문 문장을 그대로 raw_text에만 넣지 말고, 해당 문장 안의 학교/학위/전공/기간/기관/역할/성과/기술 등을 알맞은 field로 옮겨.",
+            "raw_text는 근거 확인용이므로 각 item마다 짧게 유지하고, 실제 데이터는 나머지 field에 넣어.",
+            "주관적 해석, 조언, 확인 필요, 보완 필요, URL 확인 필요 같은 문장은 어떤 field에도 쓰지 마.",
+            "LinkedIn, GitHub, Portfolio는 정확한 URL 문자열이 PDF에 보이는 경우에만 other.content에 그대로 적어. 정확한 URL이 보이지 않으면 항목을 만들지 마.",
+            "확정할 수 없는 값은 빈 문자열로 두고, 빈 항목은 만들지 마.",
         ],
-        "few_shot_example": few_shot_example,
-        "output_schema": {
-            "targetRole": "string",
-            "education": ["Korean bullet string"],
-            "projects": ["Korean bullet string"],
-            "work": ["Korean bullet string"],
-            "activity": ["Korean bullet string"],
-            "strength": ["Korean bullet string"],
-            "extra": ["Korean bullet string"],
-            "rawSummary": "short Korean summary",
-        },
     }
     body = json.dumps(
         {
@@ -1109,7 +1777,7 @@ def call_openai_pdf_field_mapping(pdf_bytes, filename, target_role=""):
                     ],
                 },
             ],
-            "max_output_tokens": 2200,
+            "max_output_tokens": 6000,
         },
         ensure_ascii=False,
     ).encode("utf-8")
@@ -1125,8 +1793,13 @@ def call_openai_pdf_field_mapping(pdf_bytes, filename, target_role=""):
     with urllib.request.urlopen(request, timeout=60) as response:
         payload = json.loads(response.read().decode("utf-8"))
     fields = parse_json_object(response_output_text(payload))
+    metadata_source = fields.get("metadata")
+    if not metadata_source and any(category in fields for category in METADATA_SCHEMA):
+        metadata_source = fields
+    metadata = normalize_metadata(metadata_source or {})
     normalized_fields = {
         "targetRole": fields.get("targetRole") or target_role,
+        "metadata": metadata,
         "education": ensure_bullet_text(fields.get("education", "")),
         "projects": ensure_bullet_text(fields.get("projects", "")),
         "work": ensure_bullet_text(fields.get("work", "")),
@@ -1135,7 +1808,7 @@ def call_openai_pdf_field_mapping(pdf_bytes, filename, target_role=""):
         "extra": ensure_bullet_text(fields.get("extra", "")),
         "rawSummary": clean_text(fields.get("rawSummary", "")),
     }
-    combined_text = "\n\n".join(str(value) for value in normalized_fields.values() if value)
+    combined_text = metadata_to_text(metadata) or "\n\n".join(str(value) for key, value in normalized_fields.items() if key != "metadata" and value)
     return combined_text, normalized_fields
 
 
@@ -1211,6 +1884,7 @@ def parse_analyze_request(headers, body):
         cv_text = ""
         filename = ""
         pdf_meta = {"method": "manual", "pages": 0}
+        mapped_fields = {}
         if pdf_file:
             filename = pdf_file["filename"]
             cv_text, mapped_fields = call_openai_pdf_field_mapping(
@@ -1219,10 +1893,23 @@ def parse_analyze_request(headers, body):
                 target_role,
             )
             pdf_meta = {"method": "openai_input_file", "pages": None, "fields": mapped_fields}
-        return cv_text, target_role, filename, pdf_meta
+        preferences = {"target_role": target_role, "preparation_period": "", "additional_user_input": ""}
+        metadata = normalize_metadata(mapped_fields.get("metadata", {})) if pdf_file else {}
+        return cv_text, target_role, filename, pdf_meta, metadata, preferences
 
     payload = json.loads(body.decode("utf-8") or "{}")
-    return payload.get("cv_text", ""), payload.get("target_role", ""), "", {"method": "manual", "pages": 0}
+    preferences = payload.get("preferences") or {}
+    target_role = payload.get("target_role") or preferences.get("target_role", "")
+    cv_text = payload.get("cv_text", "")
+    # Keep the structured user-confirmed metadata available to every downstream
+    # agent, while retaining the existing text-based ranking pipeline.
+    metadata = payload.get("metadata")
+    metadata = normalize_metadata(metadata or {})
+    if metadata:
+        cv_text = f"{cv_text}\n\nConfirmed metadata:\n{json.dumps(metadata, ensure_ascii=False)}"
+    if preferences:
+        cv_text = f"{cv_text}\n\nUser preferences:\n{json.dumps(preferences, ensure_ascii=False)}"
+    return cv_text, target_role, "", {"method": "manual", "pages": 0, "preferences": preferences}, metadata, preferences
 
 class HICareerHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -1237,6 +1924,9 @@ class HICareerHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed_url = urllib.parse.urlparse(self.path)
+        if parsed_url.path == "/api/analyze-cv-stream":
+            self.handle_analyze_cv_stream()
+            return
         if parsed_url.path == "/api/analyze-cv":
             self.handle_analyze_cv()
             return
@@ -1285,7 +1975,7 @@ class HICareerHandler(SimpleHTTPRequestHandler):
         except ValueError as exc:
             self.send_json({"error": str(exc), "text": "", "fields": {}}, status=422)
         except (json.JSONDecodeError, urllib.error.URLError, TimeoutError) as exc:
-            self.send_json({"error": f"LLM PDF 정리에 실패했습니다: {exc.__class__.__name__}", "text": "", "fields": {}}, status=502)
+            self.send_json({"error": "LLM PDF 정리에 실패했습니다. PDF 내용과 API 설정을 확인해주세요.", "text": "", "fields": {}}, status=502)
 
     def handle_analyze_cv(self):
         content_length = int(self.headers.get("Content-Length", "0"))
@@ -1294,9 +1984,11 @@ class HICareerHandler(SimpleHTTPRequestHandler):
         target_role = ""
         filename = ""
         pdf_meta = {"method": "unknown", "pages": 0}
+        metadata = {}
+        preferences = {}
 
         try:
-            cv_text, target_role, filename, pdf_meta = parse_analyze_request(self.headers, body)
+            cv_text, target_role, filename, pdf_meta, metadata, preferences = parse_analyze_request(self.headers, body)
             if not cv_text.strip():
                 self.send_json(
                     {
@@ -1313,6 +2005,7 @@ class HICareerHandler(SimpleHTTPRequestHandler):
             agent = build_agent_result(cv_text, target_role, jobs, ranked_jobs)
             summary = build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta}
             llm_report = safe_llm_report(cv_text, summary, ranked_jobs, agent)
+            feedback_loop = safe_feedback_loop(cv_text, metadata, preferences, ranked_jobs)
             self.send_json(
                 {
                     "source": "pdf" if filename else "manual",
@@ -1321,6 +2014,7 @@ class HICareerHandler(SimpleHTTPRequestHandler):
                     "rankedJobs": ranked_jobs[:6],
                     "agent": agent,
                     "llmReport": llm_report,
+                    "feedbackLoop": feedback_loop,
                 }
             )
         except (json.JSONDecodeError, ValueError):
@@ -1330,6 +2024,7 @@ class HICareerHandler(SimpleHTTPRequestHandler):
             agent = build_agent_result(cv_text, target_role, FALLBACK_JOBS, ranked_jobs)
             summary = build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta}
             llm_report = safe_llm_report(cv_text, summary, ranked_jobs, agent)
+            feedback_loop = safe_feedback_loop(cv_text, metadata, preferences, ranked_jobs)
             self.send_json(
                 {
                     "source": "fallback",
@@ -1338,8 +2033,92 @@ class HICareerHandler(SimpleHTTPRequestHandler):
                     "rankedJobs": ranked_jobs[:6],
                     "agent": agent,
                     "llmReport": llm_report,
+                    "feedbackLoop": feedback_loop,
                 }
             )
+
+    def send_stream_headers(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+    def write_stream_event(self, event, payload):
+        line = json.dumps({"event": event, "payload": payload}, ensure_ascii=False).encode("utf-8") + b"\n"
+        self.wfile.write(line)
+        self.wfile.flush()
+
+    def handle_analyze_cv_stream(self):
+        content_length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(content_length)
+        cv_text = ""
+        target_role = ""
+        filename = ""
+        pdf_meta = {"method": "unknown", "pages": 0}
+        metadata = {}
+        preferences = {}
+
+        self.send_stream_headers()
+        try:
+            self.write_stream_event("status", {"message": "입력한 metadata와 preference를 읽고 있습니다."})
+            cv_text, target_role, filename, pdf_meta, metadata, preferences = parse_analyze_request(self.headers, body)
+            if not cv_text.strip():
+                self.write_stream_event("error", {"message": "CV 텍스트를 추출하지 못했습니다. Metadata 항목을 하나 이상 입력해주세요."})
+                return
+
+            self.write_stream_event("status", {"message": "현재 공고 후보를 불러오고 CV와의 fit을 계산하고 있습니다."})
+            keyword = target_role or " ".join(extract_profile_skills(cv_text)[:3]) or DEFAULT_JOB_KEYWORD
+            jobs = fetch_popular_jobs(10, keyword)
+            ranked_jobs = rank_jobs_for_cv(cv_text, jobs, target_role)
+            agent = build_agent_result(cv_text, target_role, jobs, ranked_jobs)
+            summary = build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta}
+            llm_report = safe_llm_report(cv_text, summary, ranked_jobs, agent)
+
+            feedback_loop = build_feedback_loop(
+                cv_text,
+                metadata,
+                preferences,
+                ranked_jobs,
+                emit=self.write_stream_event,
+            )
+            self.write_stream_event(
+                "final",
+                {
+                    "source": "pdf" if filename else "manual",
+                    "filename": filename,
+                    "summary": summary,
+                    "rankedJobs": ranked_jobs[:6],
+                    "agent": agent,
+                    "llmReport": llm_report,
+                    "feedbackLoop": feedback_loop,
+                },
+            )
+        except (urllib.error.URLError, TimeoutError, ElementTree.ParseError):
+            try:
+                ranked_jobs = rank_jobs_for_cv(cv_text, FALLBACK_JOBS, target_role)
+                agent = build_agent_result(cv_text, target_role, FALLBACK_JOBS, ranked_jobs)
+                summary = build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta}
+                llm_report = safe_llm_report(cv_text, summary, ranked_jobs, agent)
+                feedback_loop = build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=self.write_stream_event)
+                self.write_stream_event(
+                    "final",
+                    {
+                        "source": "fallback",
+                        "filename": filename,
+                        "summary": summary,
+                        "rankedJobs": ranked_jobs[:6],
+                        "agent": agent,
+                        "llmReport": llm_report,
+                        "feedbackLoop": feedback_loop,
+                    },
+                )
+            except Exception as exc:
+                self.write_stream_event("error", {"message": "실시간 Feedback Loop 실행에 실패했습니다. metadata를 확인한 뒤 다시 실행해주세요."})
+        except (json.JSONDecodeError, ValueError) as exc:
+            self.write_stream_event("error", {"message": str(exc) or "요청 형식이 올바르지 않습니다."})
+        except Exception as exc:
+            self.write_stream_event("error", {"message": "실시간 분석에 실패했습니다. 잠시 뒤 다시 실행해주세요."})
 
     def send_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -1351,7 +2130,7 @@ class HICareerHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def end_headers(self):
-        if self.path.endswith(".js"):
+        if urllib.parse.urlparse(self.path).path.endswith(".js"):
             self.send_header("Content-Type", mimetypes.types_map.get(".js", "application/javascript"))
         super().end_headers()
 

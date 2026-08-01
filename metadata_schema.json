@@ -1,0 +1,117 @@
+{
+  "version": "2026-08-01",
+  "purpose": "CV PDF에서 확인 가능한 사실만 HICAREER의 편집 가능한 metadata form에 채우기 위한 JSON 계약",
+  "response_shape": {
+    "targetRole": "string",
+    "metadata": {
+      "education": [],
+      "projects_and_experience": [],
+      "awards": [],
+      "leadership_and_volunteering": [],
+      "languages_and_certificates": [],
+      "skills": [],
+      "other": []
+    },
+    "rawSummary": "string"
+  },
+  "global_rules": [
+    "PDF에 명시된 사실만 추출한다.",
+    "추정, 평가, 조언, 확인 필요, 보완 필요, 기재되어 있으나 같은 주관적 해석을 쓰지 않는다.",
+    "정확한 URL이 PDF에 보이면 그대로 적고, URL이 보이지 않으면 LinkedIn/GitHub/Portfolio 항목을 만들지 않는다.",
+    "raw_text에는 해당 항목을 만든 근거 문구만 적는다.",
+    "각 항목은 가능한 한 원문 한 덩어리를 여러 필드로 분해해 채운다.",
+    "값을 확정할 수 없는 필드는 빈 문자열로 둔다.",
+    "빈 항목이나 모든 필드가 빈 문자열인 항목은 만들지 않는다.",
+    "metadata의 category 이름과 field 이름은 이 파일에 정의된 값을 정확히 사용한다."
+  ],
+  "categories": {
+    "education": {
+      "label": "교육",
+      "description": "학력, 전공, 학위 과정, 재학/졸업 기간, GPA",
+      "fields": {
+        "school": "학교명",
+        "degree": "학위 또는 과정. 예: 학사, 석사, 박사",
+        "major": "전공명",
+        "period": "기간. 예: 2024년 3월 - 2026년 2월",
+        "gpa": "GPA 또는 평점",
+        "raw_text": "근거 원문"
+      },
+      "example": {
+        "school": "중앙대학교",
+        "degree": "학사",
+        "major": "인공지능",
+        "period": "2024년 3월 - 2026년 2월",
+        "gpa": "",
+        "raw_text": "중앙대학교 인공지능학사 과정에서 2024년 3월부터 2026년 2월까지 수학"
+      }
+    },
+    "projects_and_experience": {
+      "label": "프로젝트 및 경험",
+      "description": "프로젝트, 연구, 인턴, 실무 경험, 논문, 오픈소스, 대회 모델 개발",
+      "fields": {
+        "title": "프로젝트/경험 제목",
+        "type": "유형. 예: 연구, 프로젝트, 인턴, 논문, 오픈소스, 해커톤",
+        "period": "기간",
+        "organization": "기관, 연구실, 회사, 팀",
+        "role": "역할",
+        "description": "PDF에 명시된 수행 내용과 성과",
+        "raw_text": "근거 원문"
+      }
+    },
+    "awards": {
+      "label": "수상",
+      "description": "수상, 장학, Dean's List, 순위, 논문상",
+      "fields": {
+        "title": "수상명 또는 장학명",
+        "date": "일자 또는 연도",
+        "issuer": "수여기관",
+        "related_activity": "관련 프로젝트/대회/활동",
+        "description": "PDF에 명시된 성취 내용",
+        "raw_text": "근거 원문"
+      }
+    },
+    "leadership_and_volunteering": {
+      "label": "리더십 및 봉사",
+      "description": "동아리 운영, 회장/임원, 대외활동, 봉사",
+      "fields": {
+        "title": "활동명",
+        "type": "유형. 예: 리더십, 동아리, 봉사, 대외활동",
+        "period": "기간",
+        "organization": "기관 또는 단체",
+        "role": "역할",
+        "description": "PDF에 명시된 활동 내용",
+        "hours": "봉사 시간 등 시간 수치",
+        "raw_text": "근거 원문"
+      }
+    },
+    "languages_and_certificates": {
+      "label": "언어 및 자격증",
+      "description": "어학 점수, 자격증, 인증",
+      "fields": {
+        "name": "시험/자격증/인증명",
+        "type": "유형. 예: 언어, 자격증, 인증",
+        "score_or_level": "점수 또는 등급",
+        "issuer": "발급기관",
+        "date": "취득일 또는 응시일",
+        "raw_text": "근거 원문"
+      }
+    },
+    "skills": {
+      "label": "기술",
+      "description": "프로그래밍 언어, 프레임워크, 도구, 모델, 방법론",
+      "fields": {
+        "name": "기술명",
+        "context": "PDF에 명시된 사용 맥락",
+        "raw_text": "근거 원문"
+      }
+    },
+    "other": {
+      "label": "기타",
+      "description": "위 category에 넣기 어렵지만 PDF에 명시된 객관적 사실",
+      "fields": {
+        "content": "객관적 사실만 작성",
+        "raw_text": "근거 원문"
+      }
+    }
+  }
+}
