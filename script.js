@@ -69,6 +69,59 @@ function renderList(items) {
   return items?.length ? `<ul>${items.map((item) => `<li>${item}</li>`).join("")}</ul>` : "";
 }
 
+function renderLlmReport(report) {
+  if (!report || report.error) {
+    return report?.error ? `<p class="extract-meta">LLM 리포트 fallback: ${report.error}</p>` : "";
+  }
+
+  return `
+    <div class="llm-report">
+      <span class="result-label">LLM Career Report</span>
+      <h4>${report.headline || "CV와 공고 fit을 요약했습니다."}</h4>
+      ${report.cvSummary ? `<p>${report.cvSummary}</p>` : ""}
+      <div class="llm-grid">
+        <article>
+          <h5>강점</h5>
+          ${renderList(report.strengths || [])}
+        </article>
+        <article>
+          <h5>보완할 증거</h5>
+          ${renderList(report.evidenceGaps || [])}
+        </article>
+      </div>
+      <div class="llm-section">
+        <h5>공고별 fit 해석</h5>
+        ${(report.jobFitNotes || [])
+          .map(
+            (item) => `
+              <article>
+                <strong>${item.title}</strong>
+                <p>${item.fitReason}</p>
+                <small>${item.risk}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="llm-section">
+        <h5>추천 액션</h5>
+        ${(report.recommendedActions || [])
+          .map(
+            (item) => `
+              <article>
+                <strong>${item.title}</strong>
+                <p>${item.why}</p>
+                <small>${item.timeEstimate}</small>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      ${report.profileUpdatePrompt ? `<p class="profile-prompt">${report.profileUpdatePrompt}</p>` : ""}
+    </div>
+  `;
+}
+
 function renderAgent(agent) {
   if (!agent) return "";
   const completed = getCompletedActions();
@@ -183,6 +236,7 @@ function renderAnalysis(data) {
       <div><strong>${rankedJobs.length}</strong><span>추천 공고</span></div>
     </div>
     <p class="extract-meta">추출 방식: ${summary.pdf?.method || "manual"}</p>
+    ${renderLlmReport(data.llmReport)}
     <div class="analysis-block">
       <h4>강점</h4>
       <ul>${summary.strengths.map((item) => `<li>${item}</li>`).join("")}</ul>

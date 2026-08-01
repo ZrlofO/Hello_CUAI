@@ -21,6 +21,9 @@ WORK24_AUTH_KEY = os.getenv("WORK24_AUTH_KEY", "")
 WORK24_ENDPOINT = "https://www.work24.go.kr/cm/openApi/call/wk/callOpenApiSvcInfo210L01.do"
 CACHE_TTL_SECONDS = int(os.getenv("JOBS_CACHE_TTL_SECONDS", "600"))
 DEFAULT_JOB_KEYWORD = os.getenv("JOB_SEARCH_KEYWORD", "신입 개발 데이터 AI")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
+OPENAI_ENDPOINT = "https://api.openai.com/v1/responses"
 
 _cache = {}
 
@@ -969,6 +972,119 @@ def build_agent_result(cv_text, target_role, jobs, ranked_jobs):
     }
 
 
+def compact_for_prompt(value, max_chars=9000):
+    value = clean_text(value)
+    return value[:max_chars] + ("..." if len(value) > max_chars else "")
+
+
+def response_output_text(payload):
+    if isinstance(payload.get("output_text"), str):
+        return payload["output_text"]
+    chunks = []
+    for item in payload.get("output", []):
+        for content in item.get("content", []):
+            if isinstance(content.get("text"), str):
+                chunks.append(content["text"])
+    return "\n".join(chunks)
+
+
+def parse_json_object(text_value):
+    try:
+        return json.loads(text_value)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", text_value)
+        if not match:
+            raise
+        return json.loads(match.group(0))
+
+
+def build_llm_context(cv_text, summary, ranked_jobs, agent):
+    jobs_context = [
+        {
+            "title": job.get("title"),
+            "company": job.get("company"),
+            "fit": job.get("fit"),
+            "deadline": job.get("deadline"),
+            "location": job.get("location"),
+            "source": job.get("source"),
+            "jobKeyphrases": job.get("skills", []),
+            "fitReasons": job.get("fitReasons", []),
+            "gaps": job.get("gaps", []),
+        }
+        for job in ranked_jobs[:5]
+    ]
+    return {
+        "cv_excerpt": compact_for_prompt(cv_text),
+        "summary": summary,
+        "ranked_jobs": jobs_context,
+        "agent": {
+            "cvKeyphrases": agent.get("cvKeyphrases", []),
+            "commonRequirements": agent.get("commonRequirements", []),
+            "matchedEvidence": agent.get("matchedEvidence", []),
+            "evidenceGaps": agent.get("evidenceGaps", []),
+            "opportunities": agent.get("opportunities", []),
+            "weeklyPlan": agent.get("weeklyPlan", []),
+        },
+    }
+
+
+def call_openai_llm_report(cv_text, summary, ranked_jobs, agent):
+    if not OPENAI_API_KEY:
+        return None
+
+    prompt_context = build_llm_context(cv_text, summary, ranked_jobs, agent)
+    system_prompt = (
+        "You are HICAREER, a Korean career-growth agent. "
+        "Use only the provided CV extraction, retrieved job postings, and agent signals. "
+        "Do not invent companies, awards, projects, or job requirements. "
+        "Write concise Korean. Return JSON only."
+    )
+    user_prompt = {
+        "task": "Generate a commercial-quality CV-to-job fit report and action plan.",
+        "output_schema": {
+            "headline": "string",
+            "cvSummary": "string",
+            "strengths": ["string"],
+            "evidenceGaps": ["string"],
+            "jobFitNotes": [{"title": "string", "fitReason": "string", "risk": "string"}],
+            "recommendedActions": [{"title": "string", "why": "string", "timeEstimate": "string"}],
+            "weeklyPlan": ["string"],
+            "profileUpdatePrompt": "string",
+        },
+        "context": prompt_context,
+    }
+    body = json.dumps(
+        {
+            "model": OPENAI_MODEL,
+            "input": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(user_prompt, ensure_ascii=False)},
+            ],
+            "max_output_tokens": 1800,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        OPENAI_ENDPOINT,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return parse_json_object(response_output_text(payload))
+
+
+def safe_llm_report(cv_text, summary, ranked_jobs, agent):
+    try:
+        return call_openai_llm_report(cv_text, summary, ranked_jobs, agent)
+    except Exception as exc:
+        return {"error": f"LLM report unavailable: {exc.__class__.__name__}"}
+
+
 
 def parse_analyze_request(headers, body):
     content_type = headers.get("Content-Type", "")
@@ -1042,13 +1158,16 @@ class HICareerHandler(SimpleHTTPRequestHandler):
             jobs = fetch_popular_jobs(10, keyword)
             ranked_jobs = rank_jobs_for_cv(cv_text, jobs, target_role)
             agent = build_agent_result(cv_text, target_role, jobs, ranked_jobs)
+            summary = build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta}
+            llm_report = safe_llm_report(cv_text, summary, ranked_jobs, agent)
             self.send_json(
                 {
                     "source": "pdf" if filename else "manual",
                     "filename": filename,
-                    "summary": build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta},
+                    "summary": summary,
                     "rankedJobs": ranked_jobs[:6],
                     "agent": agent,
+                    "llmReport": llm_report,
                 }
             )
         except (json.JSONDecodeError, ValueError):
@@ -1056,13 +1175,16 @@ class HICareerHandler(SimpleHTTPRequestHandler):
         except (urllib.error.URLError, TimeoutError, ElementTree.ParseError):
             ranked_jobs = rank_jobs_for_cv(cv_text, FALLBACK_JOBS, target_role)
             agent = build_agent_result(cv_text, target_role, FALLBACK_JOBS, ranked_jobs)
+            summary = build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta}
+            llm_report = safe_llm_report(cv_text, summary, ranked_jobs, agent)
             self.send_json(
                 {
                     "source": "fallback",
                     "filename": filename,
-                    "summary": build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta},
+                    "summary": summary,
                     "rankedJobs": ranked_jobs[:6],
                     "agent": agent,
+                    "llmReport": llm_report,
                 }
             )
 

@@ -79,3 +79,18 @@ python3 server.py
 CV와 채용공고 ranking은 더 이상 미리 정한 기술 후보 목록에만 맞추지 않습니다.
 서버는 CV 텍스트와 공고 문서에서 n-gram 기반 핵심 표현을 자동 추출하고, 문서 유사도와 핵심 표현 overlap을 함께 사용해 fit score를 계산합니다.
 고정 키워드 사전은 공고 카드의 보조 분류/fallback에만 사용합니다.
+
+
+## LLM 리포트 옵션
+
+`OPENAI_API_KEY`를 설정하면 `/api/analyze-cv`가 retrieval/ranking 결과를 OpenAI Responses API에 전달해 더 자연스러운 한국어 리포트를 생성합니다.
+키가 없거나 호출이 실패하면 기존 로컬 agent 리포트로 자동 fallback합니다.
+
+```bash
+cd /root/hicareer
+export OPENAI_API_KEY="your_api_key_here"
+export OPENAI_MODEL="gpt-5.6-luna"
+PORT=4173 python3 server.py
+```
+
+주의: API 키는 절대 GitHub에 커밋하지 마세요. 이미 채팅이나 로그에 노출된 키는 OpenAI dashboard에서 revoke/rotate하는 것을 권장합니다.
