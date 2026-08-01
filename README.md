@@ -2,7 +2,7 @@
 
 HICAREER is currently a repository-local MVP for CV/job-fit analysis and career-growth recommendations. The current implementation is a static frontend served by a small Python standard-library backend.
 
-The target LangGraph architecture is defined in MASTER_PLAN.md. LangGraph is not implemented in the current Phase 0 work.
+The target LangGraph architecture is defined in MASTER_PLAN.md. The current implementation includes the Phase 2 workflow foundation; downstream research and planning agents remain intentionally out of scope.
 
 ## Current repository architecture
 
@@ -50,7 +50,7 @@ Open http://localhost:8080/.
 
 Open http://localhost:8080/.
 
-The current requirements.txt does not install LangGraph. LangGraph must be evaluated and added only in a later implementation phase.
+requirements.txt pins compatible LangGraph and SQLite-checkpoint version ranges for the current Python 3.10 environment.
 
 ## Environment configuration
 
@@ -93,7 +93,7 @@ Multipart fields:
 
 Current response fields include source, filename, pdf, text, and fields. The fields object contains targetRole, education, projects, work, activity, strength, extra, and rawSummary.
 
-This is a demo field mapper. It is not yet the provenance-aware canonical metadata model required by the product.
+The legacy mapper remains available as a compatibility adapter. The workflow endpoint uses provenance-aware, section-aware canonical metadata instead.
 
 ### CV analysis
 
@@ -160,12 +160,12 @@ The encoding issue should be investigated before changing user-facing Korean cop
 
 ## Current limitations and risks
 
-1. The current backend is a monolithic standard-library HTTP handler.
-2. LangGraph and checkpoint persistence are not installed.
-3. PDF extraction does not preserve robust page/location provenance.
-4. Current metadata is editable text blocks rather than structured item records.
-5. There is no graph interrupt or human-in-the-loop persistence.
-6. There is no claim-level evidence verification.
+1. The current backend is a monolithic standard-library HTTP handler around modular workflow services.
+2. Phase 2 adds LangGraph and SQLite checkpoint persistence; production deployment still needs a managed checkpoint store.
+3. PDF extraction preserves page-level provenance, but not reliable character coordinates and does not include OCR.
+4. Workflow metadata is structured and editable; the legacy demo mapper still returns its original simpler shape.
+5. Metadata review pauses and resumes through a persisted graph checkpoint.
+6. There is no claim-level evidence verification until the later evidence phase.
 7. Search and scraping are network-sensitive and provider-specific.
 8. Fallback jobs may be mistaken for live evidence unless clearly labeled.
 9. LLM JSON output is not governed by the final Judge contract.
@@ -192,9 +192,13 @@ New endpoints:
 
 The workflow response contains raw extraction information, normalized metadata, provenance, extraction confidence, warnings, revision, and (after confirmation) user-confirmed metadata.
 
-Phase 1 uses an in-memory workflow store. It supports revision checks and HTTP 409 conflicts, but it is not durable across process restarts. Durable LangGraph checkpointing is intentionally deferred to Phase 2.
+Phase 2 replaces the in-memory execution boundary with LangGraph 0.6.x and a SQLite checkpoint store. The declared dependency range is Python 3.10-compatible: langgraph >=0.6,<1.0 and langgraph-checkpoint-sqlite >=3.0,<4.0.
 
-The PDF extractor uses pypdf. Image-only PDFs return a warning and require user-provided metadata because OCR is not included in this phase. The existing /api/extract-cv endpoint remains available as a compatibility adapter for the previous demo flow.
+The graph starts with validate_request, extract_pdf_text, normalize_metadata, metadata_review_interrupt, and initialize_leading_agent. It pauses before initialize_leading_agent until confirmed metadata is supplied, then resumes from the SQLite checkpoint. The workflow status response includes workflow_id, next_nodes, interrupt_required, checkpointed, and leading_agent fields.
+
+The SQLite file is stored under .data/workflows.db by default and is ignored by Git. Set LANGGRAPH_CHECKPOINT_DB to use a different path and LANGGRAPH_GRAPH_TIMEOUT_SECONDS to change the graph execution timeout.
+
+The PDF extractor uses pypdf. It removes contact lines, section headings, standalone dates, and page markers from canonical items; meaningful lines are grouped under detected CV sections and retain both original_text and normalized_value for review-safe rephrasing. Image-only PDFs return a warning and require user-provided metadata because OCR is not included in this phase. The existing /api/extract-cv endpoint remains available as a compatibility adapter for the previous demo flow.
 
 ## Collaborator agent-discussion integration
 
@@ -229,4 +233,4 @@ Proceed to Phase 1 in MASTER_PLAN.md:
 5. Add role and preparation-period validation.
 6. Keep the existing API routes as compatibility adapters while introducing workflow-oriented endpoints.
 
-Do not add LangGraph, Consulting, Supporting Agents, Planner, or Calendar functionality until the confirmed metadata boundary is implemented and tested.
+Consulting, Supporting Agents, Planner, and Calendar functionality remain out of scope until the confirmed metadata and graph foundation are accepted.

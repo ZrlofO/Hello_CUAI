@@ -10,6 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from uuid import uuid4
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from xml.etree import ElementTree
@@ -18,6 +19,8 @@ from app.metadata.extraction import extract_pdf, normalize_extraction
 from app.metadata.merge import add_item, confirm_metadata, delete_item, update_item
 from app.metadata.models import WorkflowState
 from app.agent_discussion import build_metadata_handoff_discussion
+from app.graph.runner import GraphExecutionTimeout, graph_snapshot, invoke_graph, resume_graph
+from app.metadata.models import NormalizedMetadata, RawExtraction, UserConfirmedMetadata
 
 ROOT = Path(__file__).resolve().parent
 HOST = os.getenv("HOST", "0.0.0.0")
@@ -1258,7 +1261,30 @@ class RevisionConflict(ValueError):
 def get_workflow(workflow_id):
     workflow = _workflows.get(workflow_id)
     if workflow is None:
-        raise KeyError(f"Workflow not found: {workflow_id}")
+        try:
+            snapshot = graph_snapshot(workflow_id)
+            workflow = WorkflowState(
+                request_id=snapshot.get("request_id", workflow_id),
+                workflow_id=workflow_id,
+                status=snapshot.get("status", "UNKNOWN"),
+                revision=snapshot.get("metadata_revision", 0),
+                pdf=RawExtraction.model_validate(snapshot["raw_extraction"]),
+                normalized_metadata=NormalizedMetadata.model_validate(snapshot["normalized_metadata"]),
+                user_confirmed_metadata=(
+                    UserConfirmedMetadata.model_validate(snapshot["user_confirmed_metadata"])
+                    if snapshot.get("user_confirmed_metadata")
+                    else None
+                ),
+                errors=snapshot.get("errors", []),
+                warnings=snapshot.get("warnings", []),
+                next_nodes=snapshot.get("next_nodes", []),
+                interrupt_required=snapshot.get("interrupt_required", False),
+                checkpointed=snapshot.get("checkpointed", True),
+                leading_agent=snapshot.get("leading_agent", {}),
+            )
+            _workflows[workflow_id] = workflow
+        except Exception as exc:
+            raise KeyError(f"Workflow not found: {workflow_id}") from exc
     return workflow
 
 
@@ -1269,19 +1295,42 @@ def create_metadata_workflow(fields, files):
 
     filename = pdf_file.get("filename", "cv.pdf")
     pdf_bytes = pdf_file.get("content", b"")
-    raw = extract_pdf(pdf_bytes, filename, "application/pdf")
-    normalized = normalize_extraction(
-        raw,
-        preferred_role=fields.get("preferred_role", fields.get("target_role", "")),
-        preparation_period=fields.get("preparation_period", ""),
-        additional_information=fields.get("additional_information", ""),
+    request_id = str(uuid4())
+    workflow_id = str(uuid4())
+    graph_state = invoke_graph(
+        {
+            "request_id": request_id,
+            "workflow_id": workflow_id,
+            "filename": filename,
+            "content_type": "application/pdf",
+            "pdf_bytes": pdf_bytes,
+            "preferred_role": fields.get("preferred_role", fields.get("target_role", "")),
+            "preparation_period": fields.get("preparation_period", ""),
+            "additional_information": fields.get("additional_information", ""),
+            "metadata_revision": 0,
+        },
+        workflow_id,
     )
+    if graph_state.get("status") in {"VALIDATION_ERROR", "EXTRACTION_ERROR", "SCHEMA_ERROR"}:
+        raise ValueError("; ".join(graph_state.get("errors", [])) or graph_state.get("graph_error", "Graph execution failed"))
+    if "raw_extraction" not in graph_state or "normalized_metadata" not in graph_state:
+        raise ValueError("Graph did not produce the required metadata state")
+    raw = RawExtraction.model_validate(graph_state["raw_extraction"])
+    normalized = NormalizedMetadata.model_validate(graph_state["normalized_metadata"])
     workflow = WorkflowState(
+        request_id=request_id,
+        workflow_id=workflow_id,
+        status=graph_state.get("status", "METADATA_REVIEW_REQUIRED"),
+        revision=0,
         pdf=raw,
         normalized_metadata=normalized,
-        warnings=[*raw.warnings, *normalized.warnings],
+        warnings=[*graph_state.get("warnings", [])],
+        errors=[*graph_state.get("errors", [])],
+        next_nodes=graph_state.get("next_nodes", []),
+        interrupt_required=graph_state.get("interrupt_required", False),
+        checkpointed=graph_state.get("checkpointed", True),
     )
-    _workflows[workflow.request_id] = workflow
+    _workflows[workflow.workflow_id] = workflow
     return workflow
 
 
@@ -1299,6 +1348,17 @@ def update_workflow_metadata(workflow, operation, payload):
     workflow.normalized_metadata = metadata
     workflow.revision += 1
     workflow.updated_at = datetime.now(timezone.utc)
+    from app.graph.builder import workflow_graph
+    from app.graph.runner import graph_config
+    workflow_graph.update_state(
+        graph_config(workflow.workflow_id),
+        {
+            "normalized_metadata": workflow.normalized_metadata.model_dump(mode="json"),
+            "metadata_revision": workflow.revision,
+            "status": "METADATA_REVIEW_REQUIRED",
+        },
+        as_node="metadata_review_interrupt",
+    )
     return workflow
 
 
@@ -1306,7 +1366,16 @@ def confirm_workflow_metadata(workflow, payload):
     workflow_revision_check(workflow, payload)
     workflow.user_confirmed_metadata = confirm_metadata(workflow.normalized_metadata, workflow.revision + 1)
     workflow.revision += 1
-    workflow.status = "METADATA_CONFIRMED"
+    graph_state = resume_graph(
+        workflow.workflow_id,
+        workflow.user_confirmed_metadata.model_dump(mode="json"),
+        workflow.revision,
+    )
+    workflow.status = graph_state.get("status", "LEADING_AGENT_INITIALIZED")
+    workflow.next_nodes = graph_state.get("next_nodes", [])
+    workflow.interrupt_required = graph_state.get("interrupt_required", False)
+    workflow.checkpointed = graph_state.get("checkpointed", True)
+    workflow.leading_agent = graph_state.get("leading_agent", {})
     workflow.updated_at = datetime.now(timezone.utc)
     return workflow
 
@@ -1360,6 +1429,8 @@ class HICareerHandler(SimpleHTTPRequestHandler):
             fields, files = parse_multipart(body, self.headers.get("Content-Type", ""))
             workflow = create_metadata_workflow(fields, files)
             self.send_json(workflow_json(workflow), status=201)
+        except GraphExecutionTimeout as exc:
+            self.send_json({"error": str(exc), "status": "GRAPH_TIMEOUT"}, status=504)
         except (ValueError, RuntimeError) as exc:
             self.send_json({"error": str(exc)}, status=422)
         except Exception as exc:
@@ -1392,6 +1463,8 @@ class HICareerHandler(SimpleHTTPRequestHandler):
             workflow = get_workflow(parts[2])
             update_workflow_metadata(workflow, "update", payload)
             self.send_json(workflow_json(workflow))
+        except GraphExecutionTimeout as exc:
+            self.send_json({"error": str(exc), "status": "GRAPH_TIMEOUT"}, status=504)
         except RevisionConflict as exc:
             self.send_json({"error": str(exc), "current_revision": exc.current_revision}, status=409)
         except (KeyError, ValueError, json.JSONDecodeError) as exc:

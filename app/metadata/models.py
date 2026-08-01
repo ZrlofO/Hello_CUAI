@@ -88,6 +88,7 @@ class UserConfirmedMetadata(NormalizedMetadata):
 
 class WorkflowState(BaseModel):
     request_id: str = Field(default_factory=lambda: str(uuid4()))
+    workflow_id: str = Field(default_factory=lambda: str(uuid4()))
     status: str = "METADATA_REVIEW_REQUIRED"
     revision: int = Field(default=0, ge=0)
     pdf: RawExtraction
@@ -95,5 +96,9 @@ class WorkflowState(BaseModel):
     user_confirmed_metadata: Optional[UserConfirmedMetadata] = None
     errors: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
+    next_nodes: List[str] = Field(default_factory=list)
+    interrupt_required: bool = False
+    checkpointed: bool = False
+    leading_agent: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
