@@ -17,6 +17,7 @@ HICAREER는 CV를 분석해 취업 준비생의 강점, 보완점, 추천 활동
 
 ```bash
 cd /root/hicareer
+python3 -m pip install -r requirements.txt
 PORT=4173 python3 server.py
 ```
 
@@ -71,4 +72,4 @@ python3 server.py
 4. cosine similarity와 기술스택 overlap을 합쳐 fit score를 계산합니다.
 5. 추천 이유, 부족한 증거, 보완 액션을 함께 반환합니다.
 
-현재는 외부 dependency 없이 동작하는 MVP입니다. 더 정확한 PDF 파싱은 `pypdf`, Affinda, 또는 OCR API를 연결하면 개선할 수 있습니다.
+현재 PDF 추출은 `pypdf`를 우선 사용해 전체 페이지 텍스트를 읽고, 실패하면 내장 fallback 추출기를 사용합니다. 스캔 이미지 PDF는 Affinda 또는 OCR API를 연결하면 개선할 수 있습니다.

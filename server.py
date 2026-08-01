@@ -482,18 +482,35 @@ def extract_pdf_text_with_fallback(pdf_bytes):
     return clean_text(" ".join(chunks))
 
 
+def extract_text_from_page(page):
+    try:
+        return page.extract_text(extraction_mode="layout") or ""
+    except TypeError:
+        return page.extract_text() or ""
+
+
 def extract_pdf_text(pdf_bytes):
     for module_name in ("pypdf", "PyPDF2"):
         try:
             module = __import__(module_name)
             reader = module.PdfReader(io.BytesIO(pdf_bytes))
-            pages = [page.extract_text() or "" for page in reader.pages]
-            text = clean_text(" ".join(pages))
+            pages = [extract_text_from_page(page) for page in reader.pages]
+            text = clean_text("\n".join(pages))
             if text:
-                return text
+                return {
+                    "text": text,
+                    "method": module_name,
+                    "pages": len(reader.pages),
+                }
         except Exception:
             continue
-    return extract_pdf_text_with_fallback(pdf_bytes)
+
+    fallback_text = extract_pdf_text_with_fallback(pdf_bytes)
+    return {
+        "text": fallback_text,
+        "method": "fallback",
+        "pages": 0,
+    }
 
 
 def parse_multipart(body, content_type):
@@ -643,13 +660,16 @@ def parse_analyze_request(headers, body):
         pdf_file = files.get("cv_file")
         cv_text = ""
         filename = ""
+        pdf_meta = {"method": "manual", "pages": 0}
         if pdf_file:
             filename = pdf_file["filename"]
-            cv_text = extract_pdf_text(pdf_file["content"])
-        return cv_text, target_role, filename
+            extracted = extract_pdf_text(pdf_file["content"])
+            cv_text = extracted["text"]
+            pdf_meta = {"method": extracted["method"], "pages": extracted["pages"]}
+        return cv_text, target_role, filename, pdf_meta
 
     payload = json.loads(body.decode("utf-8") or "{}")
-    return payload.get("cv_text", ""), payload.get("target_role", ""), ""
+    return payload.get("cv_text", ""), payload.get("target_role", ""), "", {"method": "manual", "pages": 0}
 
 class HICareerHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -683,9 +703,13 @@ class HICareerHandler(SimpleHTTPRequestHandler):
     def handle_analyze_cv(self):
         content_length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(content_length)
+        cv_text = ""
+        target_role = ""
+        filename = ""
+        pdf_meta = {"method": "unknown", "pages": 0}
 
         try:
-            cv_text, target_role, filename = parse_analyze_request(self.headers, body)
+            cv_text, target_role, filename, pdf_meta = parse_analyze_request(self.headers, body)
             if not cv_text.strip():
                 self.send_json(
                     {
@@ -703,7 +727,7 @@ class HICareerHandler(SimpleHTTPRequestHandler):
                 {
                     "source": "pdf" if filename else "manual",
                     "filename": filename,
-                    "summary": build_cv_summary(cv_text, target_role),
+                    "summary": build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta},
                     "rankedJobs": ranked_jobs[:6],
                 }
             )
@@ -715,7 +739,7 @@ class HICareerHandler(SimpleHTTPRequestHandler):
                 {
                     "source": "fallback",
                     "filename": filename,
-                    "summary": build_cv_summary(cv_text, target_role),
+                    "summary": build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta},
                     "rankedJobs": ranked_jobs[:6],
                 }
             )

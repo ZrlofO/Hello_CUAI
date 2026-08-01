@@ -1052,3 +1052,10 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+.extract-meta {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}

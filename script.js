@@ -81,9 +81,10 @@ function renderAnalysis(data) {
     <h3>${summary.targetRole} 기준 추천 공고를 랭킹했습니다.</h3>
     <div class="summary-grid">
       <div><strong>${summary.extractedCharacters}</strong><span>추출 문자</span></div>
-      <div><strong>${summary.skills.length}</strong><span>감지 역량</span></div>
+      <div><strong>${summary.pdf?.pages || 0}</strong><span>읽은 페이지</span></div>
       <div><strong>${rankedJobs.length}</strong><span>추천 공고</span></div>
     </div>
+    <p class="extract-meta">추출 방식: ${summary.pdf?.method || "manual"}</p>
     <div class="analysis-block">
       <h4>강점</h4>
       <ul>${summary.strengths.map((item) => `<li>${item}</li>`).join("")}</ul>
