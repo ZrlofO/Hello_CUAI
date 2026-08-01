@@ -147,9 +147,14 @@ async function runJobSearch() {
     setStatus(`“${keyword}” 기준 ${currentJobs.length}개 공고를 불러왔습니다.`);
   } catch {
     if (requestId !== activeRequestId) return;
-    currentJobs = fallbackJobs;
-    renderJobs(currentJobs, activeFilter);
-    setStatus("외부 검색이 잠시 불안정해 샘플 공고를 표시합니다.");
+    currentJobs = [];
+    popularJobsContainer.innerHTML = `
+      <article class="empty-card">
+        <h3>실시간 검색 백엔드가 연결되지 않았어요.</h3>
+        <p><code>python3 server.py</code>로 실행해야 사람인·잡코리아 검색 결과가 표시됩니다.</p>
+      </article>
+    `;
+    setStatus("정적 서버가 아니라 HICAREER 백엔드 서버로 접속해주세요.");
   }
 }
 

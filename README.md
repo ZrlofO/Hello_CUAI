@@ -13,14 +13,14 @@ HICAREER는 CV를 분석해 취업 준비생의 강점, 보완점, 추천 활동
 
 정적 파일만 확인하려면 브라우저에서 `index.html`을 열면 됩니다.
 
-채용 공고 API 백엔드까지 함께 확인하려면 다음처럼 실행합니다.
+채용 공고 실시간 검색까지 함께 확인하려면 `python3 -m http.server`가 아니라 다음처럼 백엔드 서버로 실행해야 합니다.
 
 ```bash
 cd /root/hicareer
-python3 server.py
+PORT=4173 python3 server.py
 ```
 
-브라우저에서 `http://localhost:8080`으로 접속합니다.
+브라우저에서 `http://localhost:4173`으로 접속합니다.
 
 ## 채용 공고 연동 방향
 
