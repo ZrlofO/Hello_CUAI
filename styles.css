@@ -1262,3 +1262,8 @@ button:disabled {
 .question-grid textarea#extraInput {
   min-height: 180px;
 }
+
+
+.hidden {
+  display: none !important;
+}

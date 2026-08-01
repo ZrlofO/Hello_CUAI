@@ -34,6 +34,7 @@ function setInputMode(mode) {
   noPdfButton.classList.toggle("active", isManual);
   pdfMode.classList.toggle("active", isPdf);
   manualMode.classList.toggle("active", isManual);
+  analyzeButton.classList.toggle("hidden", !isManual);
 }
 
 function resetInputMode() {
@@ -41,6 +42,7 @@ function resetInputMode() {
   noPdfButton.classList.remove("active");
   pdfMode.classList.remove("active");
   manualMode.classList.remove("active");
+  analyzeButton.classList.add("hidden");
 }
 
 function renderMessage(label, title, items = []) {
