@@ -59,6 +59,19 @@ function renderLoading() {
   `;
 }
 
+async function readJsonResponse(response) {
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    throw new Error("실시간 분석 API가 연결되지 않았어요. `python3 server.py`로 실행한 주소에서 다시 열어주세요.");
+  }
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "분석에 실패했습니다.");
+  }
+  return data;
+}
+
 function renderAnalysis(data) {
   const summary = data.summary;
   const rankedJobs = data.rankedJobs || [];
@@ -115,9 +128,7 @@ async function analyzePdf() {
     method: "POST",
     body: formData,
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "PDF 분석에 실패했습니다.");
-  return data;
+  return readJsonResponse(response);
 }
 
 async function analyzeManual() {
@@ -129,9 +140,7 @@ async function analyzeManual() {
       cv_text: getManualText(),
     }),
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "분석에 실패했습니다.");
-  return data;
+  return readJsonResponse(response);
 }
 
 async function renderReport() {
