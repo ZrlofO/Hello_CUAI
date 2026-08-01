@@ -564,3 +564,163 @@ textarea:focus {
     gap: 10px;
   }
 }
+
+.page-shell {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 72px 24px 96px;
+}
+
+.page-title {
+  display: grid;
+  justify-items: center;
+  margin-bottom: 34px;
+  text-align: center;
+}
+
+.page-title h1 {
+  max-width: 850px;
+  margin-top: 12px;
+  font-size: clamp(38px, 6vw, 66px);
+}
+
+.page-title p {
+  max-width: 760px;
+  margin-top: 18px;
+  color: var(--body);
+  font-size: 18px;
+  line-height: 1.75;
+}
+
+.compact-section {
+  padding-top: 24px;
+}
+
+.nav-links a.active {
+  color: var(--navy-950);
+}
+
+.report-grid,
+.opportunity-grid,
+.plan-board {
+  display: grid;
+  gap: 18px;
+}
+
+.report-grid {
+  grid-template-columns: repeat(2, 1fr);
+  margin-bottom: 18px;
+}
+
+.metric-card,
+.opportunity-card,
+.plan-board article,
+.completion-card {
+  border: 1px solid var(--line);
+  border-radius: 30px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.metric-card {
+  padding: 30px;
+}
+
+.metric-card span,
+.plan-board span {
+  color: var(--aqua);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.metric-card strong {
+  display: block;
+  margin-top: 10px;
+  color: var(--navy-950);
+  font-size: 46px;
+  letter-spacing: -0.06em;
+}
+
+.metric-card p,
+.opportunity-card p,
+.plan-board p,
+.completion-card p {
+  margin-top: 12px;
+  color: var(--body);
+  line-height: 1.7;
+}
+
+.opportunity-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.opportunity-card {
+  padding: 28px;
+}
+
+.fit {
+  display: inline-flex;
+  margin-bottom: 20px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.fit.high {
+  color: #03665f;
+  background: rgba(80, 199, 190, 0.16);
+}
+
+.fit.mid {
+  color: #8a560d;
+  background: rgba(217, 159, 69, 0.18);
+}
+
+.opportunity-card ul {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding-left: 18px;
+  color: var(--body);
+  line-height: 1.65;
+}
+
+.plan-board {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.plan-board article {
+  padding: 28px;
+}
+
+.plan-board h3 {
+  margin-top: 12px;
+}
+
+.completion-card {
+  display: grid;
+  justify-items: start;
+  gap: 18px;
+  margin-top: 18px;
+  padding: 34px;
+  background: linear-gradient(135deg, #ffffff, var(--blue-50));
+}
+
+.next-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+@media (max-width: 900px) {
+  .report-grid,
+  .opportunity-grid,
+  .plan-board {
+    grid-template-columns: 1fr;
+  }
+}

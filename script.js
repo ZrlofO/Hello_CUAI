@@ -183,6 +183,10 @@ function renderReport() {
       <li><strong>유리한 기업군:</strong> ${report.companies.join(", ")}</li>
       <li><strong>이번 주 액션:</strong> 현재 모집 중인 기회 2개를 고르고, 한 달 안에 CV에 추가할 결과물을 정하세요.</li>
     </ul>
+    <div class="next-actions">
+      <a class="button secondary" href="report.html">샘플 리포트 보기</a>
+      <a class="button primary" href="opportunities.html">활동 추천 보기</a>
+    </div>
   `;
 }
 

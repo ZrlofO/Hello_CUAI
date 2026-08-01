@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>진단 시작 | HICAREER</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+KR:wght@400;500;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <nav class="nav">
+        <a class="brand" href="index.html"><span class="brand-mark">HI</span><span>HICAREER</span></a>
+        <div class="nav-links">
+          <a href="index.html">홈</a><a class="active" href="diagnosis.html">진단</a><a href="report.html">리포트</a><a href="opportunities.html">활동 추천</a><a href="plan.html">성장 플랜</a>
+        </div>
+        <a class="nav-cta" href="report.html">리포트 보기</a>
+      </nav>
+    </header>
+
+    <main class="page-shell">
+      <section class="page-title">
+        <span class="eyebrow">Step 1</span>
+        <h1>먼저 CV PDF가 있는지 알려주세요.</h1>
+        <p>PDF가 있으면 업로드하고, 없다면 질문형 입력으로 현재 스펙을 정리합니다.</p>
+      </section>
+
+      <section class="diagnosis-panel">
+        <div class="choice-grid" id="choiceGrid">
+          <button class="choice-card" id="hasPdfButton" type="button"><span>PDF 있음</span><strong>CV 파일 업로드</strong><small>파일 기반 진단 흐름으로 이동합니다.</small></button>
+          <button class="choice-card" id="noPdfButton" type="button"><span>PDF 없음</span><strong>질문으로 스펙 입력</strong><small>목표 직무와 경험을 직접 입력합니다.</small></button>
+        </div>
+
+        <div class="input-mode" id="pdfMode">
+          <div class="mode-header"><div><span class="step-label">Step 2A</span><h3>CV PDF 업로드</h3></div><button class="text-button" id="backFromPdf" type="button">다시 선택</button></div>
+          <label class="upload-box" for="cvFile"><input id="cvFile" type="file" accept="application/pdf,.pdf" /><span class="upload-icon">PDF</span><strong id="fileName">이력서 또는 CV 파일을 올려주세요.</strong><small>데모에서는 업로드 상태를 기준으로 다음 단계로 이동합니다.</small></label>
+        </div>
+
+        <div class="input-mode" id="manualMode">
+          <div class="mode-header"><div><span class="step-label">Step 2B</span><h3>스펙 질문 입력</h3></div><button class="text-button" id="backFromManual" type="button">다시 선택</button></div>
+          <div class="question-grid">
+            <label>목표 직무<input id="roleInput" type="text" placeholder="예: AI 엔지니어, 프론트엔드 개발자, 마케터" /></label>
+            <label>전공/교육<input id="educationInput" type="text" placeholder="예: 컴퓨터공학, 데이터 분석 부트캠프" /></label>
+            <label>프로젝트·논문·오픈소스<textarea id="projectInput" placeholder="직무 역량을 증명하는 결과물과 성과를 적어주세요."></textarea></label>
+            <label>인턴/실무 경험<textarea id="workInput" placeholder="회사, 역할, 기여도, 사용 도구, 정량 성과를 적어주세요."></textarea></label>
+            <label>대외활동·공모전·봉사<textarea id="activityInput" placeholder="직무와 연결되는 활동, 수상, 운영 경험을 적어주세요."></textarea></label>
+            <label>본인이 생각하는 강점<textarea id="strengthInput" placeholder="예: 빠른 학습, 실험 설계, 커뮤니케이션, 끈기"></textarea></label>
+          </div>
+        </div>
+
+        <button class="button primary full" id="analyzeButton" type="button">증거 격차 분석하기</button>
+        <div class="result-card" id="resultCard"><span class="result-label">대기 중</span><h3>입력 방식 선택 후 분석을 시작하세요.</h3><ul><li>분석 후 샘플 리포트 페이지로 이동할 수 있습니다.</li></ul></div>
+      </section>
+    </main>
+    <script src="script.js"></script>
+  </body>
+</html>
