@@ -235,7 +235,7 @@ function renderAnalysis(data) {
       <div><strong>${summary.pdf?.pages || 0}</strong><span>읽은 페이지</span></div>
       <div><strong>${rankedJobs.length}</strong><span>추천 공고</span></div>
     </div>
-    <p class="extract-meta">추출 방식: ${summary.pdf?.method || "manual"}</p>
+    <p class="extract-meta">정리 방식: ${summary.pdf?.method || "manual"}</p>
     ${renderLlmReport(data.llmReport)}
     <div class="analysis-block">
       <h4>강점</h4>
@@ -294,7 +294,7 @@ async function extractPdfToForm() {
   const formData = new FormData();
   formData.append("cv_file", cvFile.files[0]);
   formData.append("target_role", pdfRoleInput.value.trim());
-  renderMessage("PDF 추출 중", "PDF 텍스트를 읽고 질문 입력칸에 매핑하고 있어요.", ["추출 후 내용을 직접 수정한 다음 분석 버튼을 눌러주세요."]);
+  renderMessage("PDF 추출 중", "LLM이 PDF를 직접 읽고 입력칸별 bullet point로 정리하고 있어요.", ["정리된 bullet point를 직접 수정한 다음 분석 버튼을 눌러주세요."]);
   extractButton.disabled = true;
 
   try {
@@ -302,12 +302,12 @@ async function extractPdfToForm() {
     const data = await readJsonResponse(response);
     fillManualFields(data.fields || {});
     setInputMode("manual");
-    renderMessage("추출 완료", `${data.pdf?.pages || 0}페이지에서 텍스트를 추출했습니다.`, [
+    renderMessage("추출 완료", `${data.pdf?.pages || 0}PDF를 읽고 입력칸을 채웠습니다.`, [
       "질문 입력칸에 매핑된 내용을 확인하고 필요한 부분을 수정하세요.",
-      `추출 방식: ${data.pdf?.method || "unknown"}`,
+      `정리 방식: ${data.pdf?.method || "unknown"}`,
     ]);
   } catch (error) {
-    renderMessage("추출 실패", error.message, ["텍스트 기반 PDF인지 확인하거나 질문 입력으로 직접 작성해주세요."]);
+    renderMessage("추출 실패", error.message, ["OPENAI_API_KEY가 설정되어 있는지 확인하거나 질문 입력으로 직접 작성해주세요."]);
   } finally {
     extractButton.disabled = false;
   }
@@ -335,7 +335,7 @@ async function renderReport() {
   }
 
   if (isPdfMode) {
-    renderMessage("먼저 텍스트 추출", "PDF를 바로 분석하지 않고 입력칸에 먼저 매핑합니다.", ["`PDF 텍스트 추출해서 입력칸 채우기` 버튼을 누른 뒤 내용을 수정하고 분석해주세요."]);
+    renderMessage("먼저 텍스트 추출", "PDF를 바로 분석하지 않고 LLM으로 입력칸을 먼저 채웁니다.", ["`LLM으로 PDF 정리해서 입력칸 채우기` 버튼을 누른 뒤 내용을 수정하고 분석해주세요."]);
     return;
   }
 

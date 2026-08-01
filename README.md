@@ -66,13 +66,13 @@ python3 server.py
 
 동작 흐름:
 
-1. PDF 업로드 시 서버에서 텍스트를 추출합니다.
-2. 목표 직무 키워드로 사람인/잡코리아 공고를 검색합니다.
-3. CV 텍스트와 공고 문서를 토큰 벡터로 변환합니다.
+1. PDF 업로드 시 OpenAI가 PDF 원본을 직접 읽어 질문 입력칸별 bullet point로 정리합니다.
+2. 사용자가 정리된 입력칸을 직접 수정합니다.
+3. 수정된 CV 텍스트와 공고 문서를 토큰 벡터로 변환합니다.
 4. cosine similarity와 기술스택 overlap을 합쳐 fit score를 계산합니다.
 5. 추천 이유, 부족한 증거, 보완 액션을 함께 반환합니다.
 
-현재 PDF 추출은 `pypdf`를 우선 사용해 전체 페이지 텍스트를 읽고, 실패하면 내장 fallback 추출기를 사용합니다. 스캔 이미지 PDF는 Affinda 또는 OCR API를 연결하면 개선할 수 있습니다.
+현재 PDF 정리는 `/api/extract-cv`에서 OpenAI file input을 사용합니다. `pypdf`는 분석 fallback/로컬 테스트용으로 남아 있지만, 사용자가 보는 PDF 입력칸 매핑 흐름에는 사용하지 않습니다.
 
 ### 자동 핵심 표현 추출
 
@@ -83,8 +83,8 @@ CV와 채용공고 ranking은 더 이상 미리 정한 기술 후보 목록에�
 
 ## LLM 리포트 옵션
 
-`OPENAI_API_KEY`를 설정하면 `/api/analyze-cv`가 retrieval/ranking 결과를 OpenAI Responses API에 전달해 더 자연스러운 한국어 리포트를 생성합니다.
-키가 없거나 호출이 실패하면 기존 로컬 agent 리포트로 자동 fallback합니다.
+`OPENAI_API_KEY`를 설정하면 `/api/extract-cv`가 PDF 원본을 OpenAI file input으로 읽어 입력칸별 bullet point를 생성하고, `/api/analyze-cv`가 retrieval/ranking 결과를 OpenAI Responses API에 전달해 더 자연스러운 한국어 리포트를 생성합니다.
+분석 리포트는 키가 없거나 호출이 실패하면 기존 로컬 agent 리포트로 fallback하지만, PDF 자동 정리는 OpenAI API 키가 필요합니다.
 
 ```bash
 cd /root/hicareer

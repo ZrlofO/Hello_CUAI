@@ -1,3 +1,4 @@
+import base64
 import html
 import io
 import json
@@ -1086,6 +1087,84 @@ def safe_llm_report(cv_text, summary, ranked_jobs, agent):
 
 
 
+def call_openai_pdf_field_mapping(pdf_bytes, filename, target_role=""):
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY가 필요합니다. LLM으로 PDF를 읽으려면 서버 실행 시 API 키를 설정해주세요.")
+
+    encoded_pdf = base64.b64encode(pdf_bytes).decode("ascii")
+    system_prompt = (
+        "You are HICAREER, a Korean CV parsing agent. Read the attached PDF directly. "
+        "Do not invent details. Extract only information present in the document. "
+        "Return JSON only. Each field should be Korean bullet points, concise and editable by the user."
+    )
+    user_prompt = {
+        "target_role": target_role,
+        "instructions": [
+            "PDF를 그대로 읽고 아래 입력칸에 들어갈 내용을 bullet point로 정리해줘.",
+            "원문을 복붙하지 말고, 사용자가 수정하기 좋게 정제해줘.",
+            "논문/프로젝트/오픈소스는 결과, 역할, 사용 기술, 성과 중심으로 정리해줘.",
+            "인턴/실무 경험은 기관, 기간, 역할, 기여도 중심으로 정리해줘.",
+            "대외활동/공모전/봉사는 수상, 리더십, 운영 경험 중심으로 정리해줘.",
+            "기타에는 놓치기 쉬운 원문 세부사항, 링크, 정량 수치, 추가로 검토할 내용을 넣어줘.",
+        ],
+        "output_schema": {
+            "targetRole": "string",
+            "education": "bullet string",
+            "projects": "bullet string",
+            "work": "bullet string",
+            "activity": "bullet string",
+            "strength": "bullet string",
+            "extra": "bullet string",
+            "rawSummary": "short Korean summary",
+        },
+    }
+    body = json.dumps(
+        {
+            "model": OPENAI_MODEL,
+            "input": [
+                {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": json.dumps(user_prompt, ensure_ascii=False)},
+                        {
+                            "type": "input_file",
+                            "filename": filename or "cv.pdf",
+                            "file_data": f"data:application/pdf;base64,{encoded_pdf}",
+                        },
+                    ],
+                },
+            ],
+            "max_output_tokens": 2200,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        OPENAI_ENDPOINT,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    fields = parse_json_object(response_output_text(payload))
+    normalized_fields = {
+        "targetRole": fields.get("targetRole") or target_role,
+        "education": fields.get("education", ""),
+        "projects": fields.get("projects", ""),
+        "work": fields.get("work", ""),
+        "activity": fields.get("activity", ""),
+        "strength": fields.get("strength", ""),
+        "extra": fields.get("extra", ""),
+        "rawSummary": fields.get("rawSummary", ""),
+    }
+    combined_text = "\n\n".join(str(value) for value in normalized_fields.values() if value)
+    return combined_text, normalized_fields
+
+
 def section_between(text_value, start_patterns, end_patterns):
     lowered = text_value.lower()
     starts = [lowered.find(pattern.lower()) for pattern in start_patterns]
@@ -1204,28 +1283,32 @@ class HICareerHandler(SimpleHTTPRequestHandler):
         content_length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(content_length)
         try:
-            cv_text, target_role, filename, pdf_meta = parse_analyze_request(self.headers, body)
-            if not cv_text.strip():
-                self.send_json(
-                    {
-                        "error": "PDF 텍스트를 추출하지 못했습니다. 텍스트 기반 PDF를 업로드하거나 직접 입력해주세요.",
-                        "text": "",
-                        "fields": {},
-                    },
-                    status=422,
-                )
+            content_type = self.headers.get("Content-Type", "")
+            fields, files = parse_multipart(body, content_type)
+            target_role = fields.get("target_role", "")
+            pdf_file = files.get("cv_file")
+            if not pdf_file:
+                self.send_json({"error": "PDF 파일이 필요합니다.", "text": "", "fields": {}}, status=400)
                 return
+
+            cv_text, mapped_fields = call_openai_pdf_field_mapping(
+                pdf_file["content"],
+                pdf_file["filename"],
+                target_role,
+            )
             self.send_json(
                 {
-                    "source": "pdf" if filename else "manual",
-                    "filename": filename,
-                    "pdf": pdf_meta,
+                    "source": "openai_pdf",
+                    "filename": pdf_file["filename"],
+                    "pdf": {"method": "openai_input_file", "pages": None},
                     "text": cv_text,
-                    "fields": map_cv_text_to_fields(cv_text, target_role),
+                    "fields": mapped_fields,
                 }
             )
-        except (json.JSONDecodeError, ValueError):
-            self.send_json({"error": "요청 형식이 올바르지 않습니다.", "text": "", "fields": {}}, status=400)
+        except ValueError as exc:
+            self.send_json({"error": str(exc), "text": "", "fields": {}}, status=422)
+        except (json.JSONDecodeError, urllib.error.URLError, TimeoutError) as exc:
+            self.send_json({"error": f"LLM PDF 정리에 실패했습니다: {exc.__class__.__name__}", "text": "", "fields": {}}, status=502)
 
     def handle_analyze_cv(self):
         content_length = int(self.headers.get("Content-Length", "0"))
