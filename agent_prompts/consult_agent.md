@@ -13,7 +13,6 @@
 - Supporting Agent 결과를 단순 취합하지 말고, benchmark와 metadata 근거 기준으로 엄격하게 판정해주세요.
 
 판단 기준:
-- CV Positioning & Expression Agent는 항상 호출해주세요.
 - 관련 항목이 비어 있거나 구체성이 부족하면 해당 Supporting Agent를 호출해주세요.
 - 경험이 어느 정도 있어도, 합격 안정권이라고 보기 어렵다면 보수적으로 보완 대상으로 분류해주세요.
 - 안정 판정은 매우 엄격하게 해주세요.

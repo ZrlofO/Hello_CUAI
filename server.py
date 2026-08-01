@@ -28,6 +28,9 @@ CACHE_TTL_SECONDS = int(os.getenv("JOBS_CACHE_TTL_SECONDS", "600"))
 DEFAULT_JOB_KEYWORD = os.getenv("JOB_SEARCH_KEYWORD", "신입 채용")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
+FAST_AGENT_MODE = os.getenv("HICAREER_FAST_MODE", "1") != "0"
+SEARCH_CACHE_TTL = int(os.getenv("HICAREER_SEARCH_CACHE_TTL", "900"))
+SEARCH_CACHE = {}
 OPENAI_ENDPOINT = "https://api.openai.com/v1/responses"
 AGENT_PROMPT_DIR = ROOT / "agent_prompts"
 RETRIEVAL_SOURCE_REGISTRY_PATH = ROOT / "retrieval_source_registry.json"
@@ -157,6 +160,17 @@ def strip_tags(value):
     return clean_text(re.sub(r"<[^>]+>", " ", value))
 
 
+def cached_read_url(url, timeout=4):
+    key = (url, timeout)
+    now = time.time()
+    cached = SEARCH_CACHE.get(key)
+    if cached and now - cached[0] < SEARCH_CACHE_TTL:
+        return cached[1]
+    html_text = read_url(url, timeout=timeout)
+    SEARCH_CACHE[key] = (now, html_text)
+    return html_text
+
+
 def write_debug_json(filename, payload):
     DEBUG_DIR.mkdir(parents=True, exist_ok=True)
     path = DEBUG_DIR / filename
@@ -255,7 +269,7 @@ def read_registry_seed_candidates(source_entry, categories, assigned_gap, target
                     return candidates
     for seed_url in seed_urls[:3]:
         try:
-            html_text = read_url(seed_url, timeout=4)
+            html_text = cached_read_url(seed_url, timeout=4)
         except Exception:
             continue
         title = extract_page_title(html_text) or source_entry.get("source_name", "")
@@ -278,7 +292,7 @@ def read_registry_seed_candidates(source_entry, categories, assigned_gap, target
             link_title = link.get("title", "")
             link_excerpt = excerpt
             try:
-                link_html = read_url(link["url"], timeout=4)
+                link_html = cached_read_url(link["url"], timeout=4)
                 link_title = extract_page_title(link_html) or link_title
                 link_excerpt = extract_relevant_excerpt(link_html, keywords)
             except Exception:
@@ -1330,7 +1344,7 @@ def call_openai_llm_report(cv_text, summary, ranked_jobs, agent):
         },
         "context": prompt_context,
     }
-    return call_openai_json(system_prompt, user_prompt, max_output_tokens=2400, timeout=40)
+    return call_openai_json(system_prompt, user_prompt, max_output_tokens=1600, timeout=20)
 
 
 def build_deterministic_llm_report(summary, ranked_jobs, agent):
@@ -1424,19 +1438,6 @@ SUPPORTING_AGENT_CONFIG = {
         ),
         "task": (
             "명시된 어학/자격증/교육/기술만 사용하고, 자격증보다 프로젝트가 중요한 직무라면 그 점도 Consult Agent에게 알려주세요."
-        ),
-    },
-    "cv_positioning": {
-        "name": "CV Positioning & Expression Agent",
-        "prompt_file": "cv_positioning.md",
-        "metadata_keys": ["education", "projects_and_experience", "awards", "leadership_and_volunteering", "languages_and_certificates", "skills", "other"],
-        "benchmark_keys": ["core_requirements", "strong_profile_signals", "common_rejection_risks"],
-        "role": (
-            "너는 CV Positioning & Expression Agent입니다. CV 전체 구조, 문장 표현, 직무 포지셔닝, 성과 표현, "
-            "ATS 친화성을 검토해주세요."
-        ),
-        "task": (
-            "새로운 경험을 만들지 말고, metadata에 있는 정보를 목표 직무에 더 설득력 있게 보이도록 표현 방향을 제안해주세요."
         ),
     },
 }
@@ -1720,7 +1721,6 @@ def call_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_contex
             for key, config in SUPPORTING_AGENT_CONFIG.items()
         ],
         "selection_rules": [
-            "CV Positioning & Expression Agent는 항상 호출해주세요.",
             "관련 항목이 비어 있거나 구체성이 부족하면 호출해주세요.",
             "활동 경력이 적당히 충분해 보여도 보수적으로 보완 가능성이 있으면 호출해주세요.",
             "호출하지 않는 Agent가 있다면 conversation_log에 이유를 남겨주세요.",
@@ -1744,7 +1744,7 @@ def call_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_contex
                     "missing_or_weak_point": "string",
                     "recommended_source_policy": "string",
                     "source_categories": ["source_category from retrieval_source_registry"],
-                    "assigned_agent": "project_and_career | leadership_and_contribution | language_and_credential | cv_positioning",
+                    "assigned_agent": "project_and_career | leadership_and_contribution | language_and_credential",
                 }
             ],
             "retrieved_sources": {
@@ -1755,7 +1755,7 @@ def call_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_contex
             "conversation_log": [{"from": "Consult Agent", "to": "Supporting Agent", "message": "string"}],
         },
     }
-    result = call_openai_json(system_prompt, user_prompt, max_output_tokens=4200)
+    result = call_openai_json(system_prompt, user_prompt, max_output_tokens=2200, timeout=22)
     activated = []
     valid_keys = set(SUPPORTING_AGENT_CONFIG)
     for item in result.get("activated_agents", []):
@@ -1768,14 +1768,6 @@ def call_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_contex
                     "reason": clean_text(item.get("reason", "")),
                 }
             )
-    if not any(item["agent_key"] == "cv_positioning" for item in activated):
-        activated.append(
-            {
-                "agent_key": "cv_positioning",
-                "agent_name": SUPPORTING_AGENT_CONFIG["cv_positioning"]["name"],
-                "reason": "CV 전체 구조와 표현은 항상 검토해야 하므로 호출했습니다.",
-            }
-        )
     return {
         "benchmark": result.get("benchmark", {}),
         "gap_analysis": result.get("gap_analysis", []),
@@ -1801,26 +1793,12 @@ def fallback_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_co
             "source_categories": ["job_posting", "internship", "competition", "external_activity"],
             "assigned_agent": "project_and_career",
         },
-        {
-            "gap_name": "CV 포지셔닝과 표현",
-            "related_benchmark_requirement": "목표 직무와 CV 핵심 경험의 연결",
-            "metadata_evidence": "전체 metadata와 cv_text를 확인해야 합니다.",
-            "missing_or_weak_point": "목표 직무 기준으로 어떤 경험을 앞세울지 검토해야 합니다.",
-            "recommended_source_policy": "상위 공고의 반복 키워드와 rejection risk를 기준으로 표현을 점검합니다.",
-            "source_categories": ["job_posting", "company_info", "self_introduction_reference"],
-            "assigned_agent": "cv_positioning",
-        },
     ]
     activated_agents = [
         {
             "agent_key": "project_and_career",
             "agent_name": SUPPORTING_AGENT_CONFIG["project_and_career"]["name"],
             "reason": "프로젝트와 경험 항목은 목표 직무의 핵심 요구사항과 직접 연결되므로 보수적으로 검토합니다.",
-        },
-        {
-            "agent_key": "cv_positioning",
-            "agent_name": SUPPORTING_AGENT_CONFIG["cv_positioning"]["name"],
-            "reason": "CV 전체 구조와 표현은 항상 검토해야 하므로 호출합니다.",
         },
     ]
     return {
@@ -1873,7 +1851,7 @@ def call_supporting_agent(agent_key, metadata, preferences, benchmark, cv_text, 
             "discarded_source_count": len((agent_retrieval_results or {}).get("discarded_sources", [])),
         },
         "assigned_gap": assigned_gap,
-        "cv_text": compact_for_prompt(cv_text, 6500) if agent_key == "cv_positioning" else "",
+        "cv_text": "",
         "required_output_format": {
             "agent_name": config["name"],
             "observed_information": {},
@@ -1905,7 +1883,7 @@ def call_supporting_agent(agent_key, metadata, preferences, benchmark, cv_text, 
             },
         },
     }
-    result = call_openai_json(system_prompt, user_prompt, max_output_tokens=4200)
+    result = call_openai_json(system_prompt, user_prompt, max_output_tokens=2200, timeout=22)
     result["agent_name"] = result.get("agent_name") or config["name"]
     return result
 
@@ -1971,7 +1949,7 @@ def call_supporting_agent_revision(agent_key, metadata, preferences, benchmark, 
             "discarded_source_count": len((agent_retrieval_results or {}).get("discarded_sources", [])),
         },
         "assigned_gap": assigned_gap,
-        "cv_text": compact_for_prompt(cv_text, 6500) if agent_key == "cv_positioning" else "",
+        "cv_text": "",
         "required_output_format": {
             "agent_name": config["name"],
             "observed_information": {},
@@ -2003,7 +1981,7 @@ def call_supporting_agent_revision(agent_key, metadata, preferences, benchmark, 
             },
         },
     }
-    result = call_openai_json(system_prompt, user_prompt, max_output_tokens=4200)
+    result = call_openai_json(system_prompt, user_prompt, max_output_tokens=2200, timeout=22)
     result["agent_name"] = result.get("agent_name") or config["name"]
     result["revision_of"] = original_review.get("agent_name", config["name"]) if isinstance(original_review, dict) else config["name"]
     return result
@@ -2096,7 +2074,7 @@ def call_consult_agent_review(metadata, preferences, ranked_jobs, plan, supporti
             "conversation_log": [{"from": "Consult Agent", "to": "string", "message": "string"}],
         },
     }
-    return call_openai_json(system_prompt, user_prompt, max_output_tokens=5000)
+    return call_openai_json(system_prompt, user_prompt, max_output_tokens=2200, timeout=22)
 
 
 def fallback_consult_agent_review(metadata, preferences, plan, supporting_reviews, allow_revisions=False):
@@ -2529,7 +2507,7 @@ def call_planner_agent(planner_input):
             "일정과 URL이 명확하지 않은 외부 기회는 uncertain_items로 보내고, Google Calendar write는 절대 하지 마세요."
         ),
     }
-    return call_openai_json(PLANNER_AGENT_PROMPT, user_prompt, max_output_tokens=5000)
+    return call_openai_json(PLANNER_AGENT_PROMPT, user_prompt, max_output_tokens=2200, timeout=22)
 
 
 def call_leading_agent_final(metadata, preferences, consult_result, planner_result=None):
@@ -2564,7 +2542,7 @@ def call_leading_agent_final(metadata, preferences, consult_result, planner_resu
             "conversation_log": [{"from": "Leading Agent", "to": "Consult Agent", "message": "string"}],
         },
     }
-    return call_openai_json(system_prompt, user_prompt, max_output_tokens=3600)
+    return call_openai_json(system_prompt, user_prompt, max_output_tokens=1800, timeout=20)
 
 
 def fallback_leading_agent_final(preferences, consult_result, planner_result=None):
@@ -2690,19 +2668,22 @@ def process_supporting_consult_lane(item, metadata, preferences, ranked_jobs, pl
             support_message["to"] = consult_clone_name
         add_lane_message(support_message)
 
-    try:
-        first_clone_review = call_consult_agent_review(
-            metadata,
-            preferences,
-            ranked_jobs,
-            scoped_plan,
-            {agent_key: support_review},
-            retrieval_context,
-            allow_revisions=True,
-            supporting_search_results=scoped_search_results,
-        )
-    except Exception:
-        first_clone_review = fallback_consult_agent_review(metadata, preferences, scoped_plan, {agent_key: support_review}, allow_revisions=True)
+    if FAST_AGENT_MODE:
+        first_clone_review = fallback_consult_agent_review(metadata, preferences, scoped_plan, {agent_key: support_review}, allow_revisions=False)
+    else:
+        try:
+            first_clone_review = call_consult_agent_review(
+                metadata,
+                preferences,
+                ranked_jobs,
+                scoped_plan,
+                {agent_key: support_review},
+                retrieval_context,
+                allow_revisions=True,
+                supporting_search_results=scoped_search_results,
+            )
+        except Exception:
+            first_clone_review = fallback_consult_agent_review(metadata, preferences, scoped_plan, {agent_key: support_review}, allow_revisions=True)
 
     for message in normalize_conversation_log(first_clone_review.get("conversation_log", [])):
         if message.get("from") == "Consult Agent":
@@ -2711,7 +2692,7 @@ def process_supporting_consult_lane(item, metadata, preferences, ranked_jobs, pl
             message["to"] = consult_clone_name
         add_lane_message(message)
 
-    revision_requests = [
+    revision_requests = [] if FAST_AGENT_MODE else [
         request for request in first_clone_review.get("revision_requests", [])
         if isinstance(request, dict) and request.get("agent_key") == agent_key
     ][:1]
@@ -2761,20 +2742,23 @@ def process_supporting_consult_lane(item, metadata, preferences, ranked_jobs, pl
                 }
             )
 
-    try:
-        clone_final_review = call_consult_agent_review(
-            metadata,
-            preferences,
-            ranked_jobs,
-            scoped_plan,
-            {agent_key: support_review},
-            retrieval_context,
-            allow_revisions=False,
-            prior_review=first_clone_review,
-            supporting_search_results=scoped_search_results,
-        )
-    except Exception:
+    if FAST_AGENT_MODE:
         clone_final_review = fallback_consult_agent_review(metadata, preferences, scoped_plan, {agent_key: support_review}, allow_revisions=False)
+    else:
+        try:
+            clone_final_review = call_consult_agent_review(
+                metadata,
+                preferences,
+                ranked_jobs,
+                scoped_plan,
+                {agent_key: support_review},
+                retrieval_context,
+                allow_revisions=False,
+                prior_review=first_clone_review,
+                supporting_search_results=scoped_search_results,
+            )
+        except Exception:
+            clone_final_review = fallback_consult_agent_review(metadata, preferences, scoped_plan, {agent_key: support_review}, allow_revisions=False)
 
     for message in normalize_conversation_log(clone_final_review.get("conversation_log", [])):
         if message.get("from") == "Consult Agent":
@@ -2972,7 +2956,7 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
                 "message": (
                     "각 lane의 1:1 검토 결과를 전달합니다.\n"
                     f"- 완료 lane: {', '.join(SUPPORTING_AGENT_CONFIG.get(key, {}).get('name', key) for key in lane_conversations)}\n"
-                    "Final Consult Agent는 clone 결과를 합쳐 전체 우선순위와 최종 위험 분류만 정리해주세요."
+                    + ("Fast Mode에서는 별도 Final Consult LLM 호출 없이 Supporting Agent 결과를 바로 통합합니다." if FAST_AGENT_MODE else "Final Consult Agent는 clone 결과를 합쳐 전체 우선순위와 최종 위험 분류만 정리해주세요.")
                 ),
             }
         ],
@@ -2981,21 +2965,25 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
     for message in normalize_conversation_log(first_consult_review.get("conversation_log", [])):
         emit_event("conversation", message)
 
-    emit_event("status", {"message": "Consult Agent가 최종 통합 결과를 정리하고 있습니다."})
-    try:
-        consult_review = call_consult_agent_review(
-            metadata,
-            preferences,
-            ranked_jobs,
-            plan,
-            supporting_reviews,
-            retrieval_context,
-            allow_revisions=False,
-            prior_review=first_consult_review,
-            supporting_search_results=supporting_search_results,
-        )
-    except Exception:
+    if FAST_AGENT_MODE:
+        emit_event("status", {"message": "Fast Mode가 Supporting Agent 결과를 바로 통합하고 있습니다."})
         consult_review = fallback_consult_agent_review(metadata, preferences, plan, supporting_reviews, allow_revisions=False)
+    else:
+        emit_event("status", {"message": "Consult Agent가 최종 통합 결과를 정리하고 있습니다."})
+        try:
+            consult_review = call_consult_agent_review(
+                metadata,
+                preferences,
+                ranked_jobs,
+                plan,
+                supporting_reviews,
+                retrieval_context,
+                allow_revisions=False,
+                prior_review=first_consult_review,
+                supporting_search_results=supporting_search_results,
+            )
+        except Exception:
+            consult_review = fallback_consult_agent_review(metadata, preferences, plan, supporting_reviews, allow_revisions=False)
     conversation_log.extend(normalize_conversation_log(consult_review.get("conversation_log", [])))
     for message in normalize_conversation_log(consult_review.get("conversation_log", [])):
         emit_event("conversation", message)
@@ -3016,10 +3004,13 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
     conversation_log.append(planner_handoff_message)
     emit_event("conversation", planner_handoff_message)
     emit_event("status", {"message": "Planner Agent가 검증된 source를 기준으로 Calendar Draft와 Todo를 만들고 있습니다."})
-    try:
-        planner_result = call_planner_agent(planner_input)
-    except Exception:
+    if FAST_AGENT_MODE:
         planner_result = fallback_planner_result(planner_input)
+    else:
+        try:
+            planner_result = call_planner_agent(planner_input)
+        except Exception:
+            planner_result = fallback_planner_result(planner_input)
     planner_result = normalize_planner_result(planner_result)
     planner_message = planner_result.get("conversation_message") if isinstance(planner_result, dict) else None
     if isinstance(planner_message, dict):
@@ -3055,16 +3046,19 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
     }
     conversation_log.append(final_handoff_message)
     emit_event("conversation", final_handoff_message)
-    try:
-        leading_final = call_leading_agent_final(metadata, preferences, consult_review, planner_result)
-    except Exception:
+    if FAST_AGENT_MODE:
         leading_final = fallback_leading_agent_final(preferences, consult_review, planner_result)
+    else:
+        try:
+            leading_final = call_leading_agent_final(metadata, preferences, consult_review, planner_result)
+        except Exception:
+            leading_final = fallback_leading_agent_final(preferences, consult_review, planner_result)
     conversation_log.extend(normalize_conversation_log(leading_final.get("conversation_log", [])))
     for message in normalize_conversation_log(leading_final.get("conversation_log", [])):
         emit_event("conversation", message)
 
     return {
-        "mode": "multi_call_parallel_consult_clones",
+        "mode": "fast_parallel_consult_clones" if FAST_AGENT_MODE else "multi_call_parallel_consult_clones",
         "retrievalPolicy": "consulting_source_registry_quality_gate",
         "retrievedSources": retrieval_context,
         "supportingRetrievalResults": supporting_search_results,
