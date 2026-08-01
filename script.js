@@ -16,6 +16,7 @@ const confirmButton = document.querySelector("#confirmButton");
 const discussionPanel = document.querySelector("#discussionPanel");
 
 let workflow = null;
+let discussionPollTimer = null;
 
 function workflowPathId() {
   return workflow && (workflow.workflow_id || workflow.request_id);
@@ -69,6 +70,7 @@ function renderPreferences() {
     "<h3>" + escapeHtml(preferences.preferred_role || "목표 직무 미입력") + "</h3>" +
     "<p>준비 기간: " + escapeHtml(preferences.preparation_period || "미입력") + "</p>" +
     (preferences.additional_information ? "<p>추가 정보: " + escapeHtml(preferences.additional_information) + "</p>" : "") +
+    "<small class=\"extract-meta\">normalization: " + escapeHtml(workflow.normalized_metadata.normalization_method || "-") + "</small>" +
     '<small class="extract-meta">PDF ' + escapeHtml(workflow.pdf.filename) + " · " + workflow.pdf.page_count + " pages · " + escapeHtml(workflow.pdf.extraction_method) + "</small>";
 }
 
@@ -94,6 +96,7 @@ function renderGroups() {
         return '<div class="metadata-item" data-item-id="' + escapeHtml(item.item_id) + '">' +
           '<div class="metadata-item-main">' +
           '<textarea class="metadata-value">' + escapeHtml(item.normalized_value) + "</textarea>" +
+          (item.keywords && item.keywords.length ? '<small class="metadata-keywords">keywords: ' + escapeHtml(item.keywords.join(", ")) + '</small>' : '') +
           "<small>provenance: " + escapeHtml(item.provenance) +
           " · confidence: " + Number(item.extraction_confidence).toFixed(2) +
           (item.source_page ? " · page " + item.source_page : "") + "</small></div>" +
@@ -121,7 +124,8 @@ function renderDiscussion(discussion) {
   if (!discussionPanel || !discussion) return;
   discussionPanel.innerHTML =
     '<div class="agent-header"><span class="result-label">Agent Communication</span>' +
-    '<h4>확정 metadata handoff</h4><p>' + escapeHtml((discussion.warnings || []).join(" ")) + "</p></div>" +
+    '<h4>Agent Communication</h4><p>' + escapeHtml((discussion.warnings || []).join(" ")) + "</p>" +
+    '<small class="extract-meta">last update: ' + escapeHtml(discussion.updated_at || "-") + '</small></div>' +
     '<div class="discussion-flow">' +
     (discussion.discussionHistory || []).map(function(turn, index) {
       return '<article class="dialogue-turn ' + escapeHtml(turn.tone || "agent") + '">' +
@@ -133,6 +137,33 @@ function renderDiscussion(discussion) {
         '</small></div></article>';
     }).join("") + '</div>';
   discussionPanel.classList.remove("hidden");
+}
+
+function stopDiscussionPolling() {
+  if (discussionPollTimer) {
+    clearTimeout(discussionPollTimer);
+    discussionPollTimer = null;
+  }
+}
+
+async function pollDiscussion() {
+  if (!workflow || !workflowPathId()) return;
+  try {
+    const response = await fetch("/api/workflows/" + workflowPathId() + "/discussion", {
+      headers: { "Accept": "application/json" },
+      cache: "no-store",
+    });
+    const discussion = await readJson(response);
+    renderDiscussion(discussion);
+    discussionPollTimer = setTimeout(pollDiscussion, Number(discussion.next_poll_ms || 1500));
+  } catch (error) {
+    discussionPollTimer = setTimeout(pollDiscussion, 3000);
+  }
+}
+
+function startDiscussionPolling() {
+  stopDiscussionPolling();
+  pollDiscussion();
 }
 
 async function createWorkflow(event) {
@@ -225,10 +256,11 @@ async function confirmMetadata() {
       body: JSON.stringify({ base_revision: workflow.revision }),
     });
     workflow = await readJson(response);
-    setStatus("metadata 확정 완료", "확정된 프로필이 저장되었습니다. 다음 Phase에서 graph resume을 연결합니다.", false);
+    localStorage.setItem("hicareer.workflow_id", workflowPathId());
+    setStatus("metadata 확정 완료", "확정된 프로필이 저장되었습니다. 현재 리포트를 확인합니다.", false);
     confirmButton.textContent = "확정 완료";
-    const discussionResponse = await fetch("/api/workflows/" + workflowPathId() + "/discussion");
-    renderDiscussion(await readJson(discussionResponse));
+    startDiscussionPolling();
+    window.location.href = "report.html?workflow_id=" + encodeURIComponent(workflowPathId());
   } catch (error) {
     setStatus("확정 실패", error.message, true);
     confirmButton.disabled = false;

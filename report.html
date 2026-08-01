@@ -4,24 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>분석 리포트 | HICAREER</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+KR:wght@400;500;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <header class="site-header"><nav class="nav"><a class="brand" href="index.html"><span class="brand-mark">HI</span><span>HICAREER</span></a><div class="nav-links"><a href="index.html">홈</a><a href="diagnosis.html">진단</a><a class="active" href="report.html">리포트</a><a href="opportunities.html">활동 추천</a><a href="plan.html">성장 플랜</a></div><a class="nav-cta" href="opportunities.html">활동 추천 보기</a></nav></header>
-    <main class="page-shell">
-      <section class="page-title"><span class="eyebrow">Step 2</span><h1>목표 직무 기준 증거 격차 리포트</h1><p>일반적인 CV 완성도가 아니라, 실제 채용공고에서 반복되는 역량을 증명할 근거가 있는지 확인합니다.</p></section>
-      <section class="report-grid">
-        <article class="metric-card"><span>Readiness</span><strong>72%</strong><p>지원 가능하지만 외부 검증 근거를 보강하면 합격 가능성이 올라갑니다.</p></article>
-        <article class="metric-card"><span>Target Role</span><strong>AI·데이터</strong><p>프로젝트 경험은 강점이며, 배포/논문/해커톤 증거가 있으면 더 좋습니다.</p></article>
-      </section>
-      <section class="stacked-cards">
-        <article class="wide-card positive-card"><span>강점</span><h3>기술 프로젝트와 문제 해결 경험이 포지셔닝의 중심입니다.</h3><p>지원서에서는 사용 기술 나열보다 문제, 접근, 결과, 배운 점 순서로 강점을 밀고 가는 것이 좋습니다.</p></article>
-        <article class="wide-card caution-card"><span>부족한 증거</span><h3>목표 직무의 요구 역량을 외부에서 검증받은 흔적이 부족합니다.</h3><p>AI·데이터 직무라면 봉사활동보다 해커톤, 논문 리뷰, 오픈소스 PR, 데이터 프로젝트 배포가 더 높은 효과를 냅니다.</p></article>
-      </section>
-      <div class="next-actions"><a class="button secondary" href="diagnosis.html">다시 진단</a><a class="button primary" href="opportunities.html">현재 가능한 활동 보기</a></div>
+    <header class="site-header"><nav class="nav"><a class="brand" href="index.html"><span class="brand-mark">HI</span><span>HICAREER</span></a><div class="nav-links"><a href="index.html">홈</a><a href="diagnosis.html">진단</a><a class="active" href="report.html">리포트</a><a href="opportunities.html">활동 추천</a><a href="plan.html">성장 플랜</a></div><a class="nav-cta" href="diagnosis.html">새 진단</a></nav></header>
+    <main class="page-shell" id="reportRoot">
+      <section class="page-title"><span class="eyebrow">Phase 10</span><h1>근거와 진행 상태를 함께 보는 분석 리포트</h1><p>확정된 metadata와 승인된 workflow state만 표시합니다. 확인되지 않은 정보는 사실처럼 채우지 않습니다.</p></section>
+      <div id="reportStatus" class="result-card"><span class="result-label">상태</span><h3>리포트를 불러오는 중입니다.</h3><p>workflow 결과를 확인하고 있습니다.</p></div>
+      <div id="reportContent" class="report-content hidden"></div>
     </main>
+    <script src="report.js"></script>
   </body>
 </html>

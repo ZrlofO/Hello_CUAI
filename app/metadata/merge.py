@@ -17,7 +17,7 @@ def update_item(metadata: NormalizedMetadata, item_id: str, changes: Dict[str, A
             continue
         if item.user_confirmation_status == UserConfirmationStatus.CONFIRMED:
             raise ValueError("Confirmed metadata cannot be silently overwritten")
-        allowed = {"category", "sub_category", "normalized_value", "original_text", "source_page", "source_location"}
+        allowed = {"category", "sub_category", "normalized_value", "keywords", "original_text", "source_page", "source_location"}
         payload = item.dict()
         payload.update({key: value for key, value in changes.items() if key in allowed})
         payload["provenance"] = Provenance.USER_CORRECTED

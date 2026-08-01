@@ -1268,6 +1268,14 @@ button:disabled {
   display: none !important;
 }
 
+.report-content { display: grid; gap: 18px; }
+.report-section h3 { margin-top: 10px; }
+.report-section ul { display: grid; gap: 10px; margin: 16px 0 0; padding-left: 20px; color: var(--body); line-height: 1.65; }
+.report-section a { color: var(--navy-800); font-weight: 800; text-decoration: underline; }
+.report-section small { display: block; color: var(--muted); }
+.empty-inline { margin-top: 12px; color: var(--muted); }
+.report-state { margin-top: 0; }
+
 .metadata-items {
   display: grid;
   gap: 12px;

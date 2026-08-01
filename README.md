@@ -236,6 +236,10 @@ The Planner portion adds `app/planner/` and `POST /api/planner/plan`. It accepts
 
 Phase 9 adds a Google Calendar boundary without integrating Google services. `app/calendar/` defines authorization status, user proposal approvals, date/evidence gates, a future provider protocol, and an in-memory mock provider exposed through `POST /api/calendar/mock`. The mock endpoint never performs external writes, stores no OAuth credentials, and always reports `external_write_performed=false`. Only `VERIFIED_EXTERNAL_DATE` and `USER_CONFIRMED_DATE` proposals can proceed; tentative, unscheduled, suggested, expired, unverified-deadline, unauthorized, invalid, duplicate, or failed proposals are returned independently with explicit result codes.
 
+### Phase 10 final report and UI integration
+
+Phase 10 adds `app/report/` and `GET /api/workflows/{workflow_id}/report`. The final report contract separates confirmed profile facts, market analysis, supporting findings, readiness, recommendations, Planner output, calendar proposals, citations, warnings, uncertainty notes, and graph status. It is assembled only from the current approved workflow state; unavailable downstream results remain partial instead of being invented. `report.html` and `report.js` fetch the live contract using the workflow ID saved after metadata confirmation, render citations as external links, and display partial/error states. No Google Calendar or OAuth operation is performed.
+
 The PDF extractor uses pypdf. It removes contact lines, section headings, standalone dates, and page markers from canonical items; meaningful lines are grouped under detected CV sections and retain both original_text and normalized_value for review-safe rephrasing. Image-only PDFs return a warning and require user-provided metadata because OCR is not included in this phase. The existing /api/extract-cv endpoint remains available as a compatibility adapter for the previous demo flow.
 
 ## Collaborator agent-discussion integration

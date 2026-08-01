@@ -39,6 +39,7 @@ from app.planner.models import PlannerRequest
 from app.planner.service import PlannerAgent
 from app.calendar.models import CalendarBatchRequest
 from app.calendar.service import CalendarService, MockAuthorizationBoundary, MockCalendarProvider
+from app.report import build_final_report
 
 ROOT = Path(__file__).resolve().parent
 HOST = os.getenv("HOST", "0.0.0.0")
@@ -1322,6 +1323,13 @@ def get_workflow(workflow_id):
                 leading_agent=snapshot.get("leading_agent", {}),
                 claims=snapshot.get("claims", []),
                 evidence_ledger=snapshot.get("evidence_ledger", {"claims": [], "evidence": [], "warnings": []}),
+                market_analysis=snapshot.get("market_analysis", {}),
+                supporting_findings=snapshot.get("supporting_findings", []),
+                judge_results=snapshot.get("judge_results", []),
+                readiness_classification=snapshot.get("readiness_classification"),
+                recommendations=snapshot.get("recommendations", []),
+                planner_result=snapshot.get("planner_result", {}),
+                final_report=snapshot.get("final_report", {}),
             )
             _workflows[workflow_id] = workflow
         except Exception as exc:
@@ -1372,6 +1380,13 @@ def create_metadata_workflow(fields, files):
         checkpointed=graph_state.get("checkpointed", True),
         claims=graph_state.get("claims", []),
         evidence_ledger=graph_state.get("evidence_ledger", {"claims": [], "evidence": [], "warnings": []}),
+        market_analysis=graph_state.get("market_analysis", {}),
+        supporting_findings=graph_state.get("supporting_findings", []),
+        judge_results=graph_state.get("judge_results", []),
+        readiness_classification=graph_state.get("readiness_classification"),
+        recommendations=graph_state.get("recommendations", []),
+        planner_result=graph_state.get("planner_result", {}),
+        final_report=graph_state.get("final_report", {}),
     )
     _workflows[workflow.workflow_id] = workflow
     return workflow
@@ -1421,6 +1436,13 @@ def confirm_workflow_metadata(workflow, payload):
     workflow.leading_agent = graph_state.get("leading_agent", {})
     workflow.claims = graph_state.get("claims", [])
     workflow.evidence_ledger = graph_state.get("evidence_ledger", {"claims": [], "evidence": [], "warnings": []})
+    workflow.market_analysis = graph_state.get("market_analysis", workflow.market_analysis)
+    workflow.supporting_findings = graph_state.get("supporting_findings", workflow.supporting_findings)
+    workflow.judge_results = graph_state.get("judge_results", workflow.judge_results)
+    workflow.readiness_classification = graph_state.get("readiness_classification", workflow.readiness_classification)
+    workflow.recommendations = graph_state.get("recommendations", workflow.recommendations)
+    workflow.planner_result = graph_state.get("planner_result", workflow.planner_result)
+    workflow.final_report = graph_state.get("final_report", workflow.final_report)
     workflow.warnings = graph_state.get("warnings", workflow.warnings)
     workflow.errors = graph_state.get("errors", workflow.errors)
     workflow.updated_at = datetime.now(timezone.utc)
@@ -1619,6 +1641,16 @@ class HICareerHandler(SimpleHTTPRequestHandler):
                 })
             except KeyError as exc:
                 self.send_json({"error": str(exc)}, status=404)
+            return
+        if len(parts) == 4 and parts[0:2] == ["api", "workflows"] and parts[3] == "report":
+            try:
+                workflow = get_workflow(parts[2])
+                report = build_final_report(workflow)
+                self.send_json(report.model_dump(mode="json"))
+            except KeyError as exc:
+                self.send_json({"error": str(exc)}, status=404)
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, status=422)
             return
         if len(parts) != 3 or parts[0:2] != ["api", "workflows"]:
             self.send_json({"error": "Not found"}, status=404)

@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from app.metadata.extraction import extract_pdf, normalize_extraction
 from app.metadata.models import NormalizedMetadata, RawExtraction
+from app.metadata.rephrase import rephrase_metadata
 from app.evidence.ledger import EvidenceLedger
 from app.evidence.models import Claim, ClaimType, ClaimVerdict
 
@@ -63,6 +64,19 @@ def normalize_metadata(state: WorkflowGraphState) -> Dict[str, Any]:
             preparation_period=state.get("preparation_period", ""),
             additional_information=state.get("additional_information", ""),
         )
+        try:
+            rephrased = rephrase_metadata(
+                raw,
+                preferred_role=state.get("preferred_role", ""),
+                preparation_period=state.get("preparation_period", ""),
+            )
+            if rephrased is not None:
+                normalized = rephrased
+            else:
+                normalized.warnings.append("LLM rephrasing was not used; deterministic normalization is active")
+        except Exception as exc:
+            normalized.warnings.append(f"LLM rephrasing failed; deterministic normalization was used ({exc.__class__.__name__})")
+            normalized.normalization_method = "deterministic_section_normalizer_fallback"
         return {
             "normalized_metadata": normalized.model_dump(mode="json"),
             "status": "METADATA_REVIEW_REQUIRED",

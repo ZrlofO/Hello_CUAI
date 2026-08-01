@@ -39,6 +39,7 @@ class MetadataItem(BaseModel):
     category: str
     sub_category: Optional[str] = None
     normalized_value: str
+    keywords: List[str] = Field(default_factory=list)
     original_text: Optional[str] = None
     source_page: Optional[int] = Field(default=None, ge=1)
     source_location: Optional[str] = None
@@ -79,6 +80,8 @@ class NormalizedMetadata(BaseModel):
     preferences: PreferenceInformation = Field(default_factory=PreferenceInformation)
     warnings: List[str] = Field(default_factory=list)
     extraction_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    normalization_method: str = "deterministic_section_normalizer"
+    rephrasing_model: Optional[str] = None
 
 
 class UserConfirmedMetadata(NormalizedMetadata):
@@ -102,5 +105,12 @@ class WorkflowState(BaseModel):
     leading_agent: Dict[str, Any] = Field(default_factory=dict)
     claims: List[Dict[str, Any]] = Field(default_factory=list)
     evidence_ledger: Dict[str, Any] = Field(default_factory=lambda: {"claims": [], "evidence": [], "warnings": []})
+    market_analysis: Dict[str, Any] = Field(default_factory=dict)
+    supporting_findings: List[Dict[str, Any]] = Field(default_factory=list)
+    judge_results: List[Dict[str, Any]] = Field(default_factory=list)
+    readiness_classification: Optional[Dict[str, Any]] = None
+    recommendations: List[Dict[str, Any]] = Field(default_factory=list)
+    planner_result: Dict[str, Any] = Field(default_factory=dict)
+    final_report: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

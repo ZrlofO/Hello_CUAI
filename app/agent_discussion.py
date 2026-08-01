@@ -12,11 +12,18 @@ def build_metadata_handoff_discussion(workflow: WorkflowState) -> Dict[str, Any]
     role = metadata.preferences.preferred_role or "목표 직무 미입력"
     period = metadata.preferences.preparation_period or "준비 기간 미입력"
     item_count = len(metadata.items)
+    claim_count = len(workflow.claims)
+    evidence_count = len((workflow.evidence_ledger or {}).get("evidence", []))
     timestamp = datetime.now(timezone.utc).isoformat()
 
     return {
-        "status": "PHASE_1_HANDOFF",
+        "status": workflow.status,
         "source": "confirmed_metadata",
+        "workflow_id": workflow.workflow_id,
+        "updated_at": workflow.updated_at.isoformat(),
+        "next_poll_ms": 1500,
+        "claims_count": claim_count,
+        "evidence_count": evidence_count,
         "warnings": [
             "Phase 1에서는 market research와 Supporting Agent 실행을 아직 시작하지 않았습니다.",
             "아래 메시지는 확정 metadata handoff 상태이며 외부 사실이나 추천이 아닙니다.",
@@ -27,7 +34,7 @@ def build_metadata_handoff_discussion(workflow: WorkflowState) -> Dict[str, Any]
                 "speaker": "Leading Agent 1 · Applicant Profile",
                 "role": "confirmed metadata handoff",
                 "tone": "profile",
-                "status": "COMPLETED",
+                "status": "COMPLETED" if workflow.user_confirmed_metadata else "PENDING",
                 "message": f"확정된 지원자 프로필을 전달합니다. 목표 직무는 '{role}', 준비 기간은 '{period}', 확정 metadata 항목은 {item_count}개입니다.",
                 "evidence_refs": [item.item_id for item in metadata.items],
                 "created_at": timestamp,
@@ -38,7 +45,7 @@ def build_metadata_handoff_discussion(workflow: WorkflowState) -> Dict[str, Any]
                 "role": "next-stage handoff",
                 "tone": "strategy",
                 "status": "PENDING",
-                "message": "확정 metadata를 수신했습니다. 다음 단계에서만 현재 채용시장 evidence를 조회하고, source quality와 freshness 검증 후 gap을 선택해야 합니다.",
+                "message": f"Market research is waiting for the retrieval phase. Current ledger: {claim_count} claims and {evidence_count} evidence records.",
                 "evidence_refs": [],
                 "created_at": timestamp,
             },
