@@ -1,5 +1,8 @@
 const popularJobsContainer = document.querySelector("#popularJobs");
 const jobFilters = document.querySelectorAll("[data-job-filter]");
+const jobSearchInput = document.querySelector("#jobSearchInput");
+const jobSearchButton = document.querySelector("#jobSearchButton");
+const jobSearchStatus = document.querySelector("#jobSearchStatus");
 
 const fallbackJobs = [
   {
@@ -12,6 +15,7 @@ const fallbackJobs = [
     skills: ["Python", "LLM", "데이터 전처리"],
     reason: "프로젝트·논문·해커톤 경험을 강점으로 가져가기 좋은 공고",
     url: "diagnosis.html",
+    source: "샘플",
   },
   {
     title: "Frontend Developer Intern",
@@ -23,6 +27,7 @@ const fallbackJobs = [
     skills: ["React", "TypeScript", "UI 구현"],
     reason: "배포 프로젝트와 GitHub 증거를 보여주기 좋은 포지션",
     url: "diagnosis.html",
+    source: "샘플",
   },
   {
     title: "Data Analyst Assistant",
@@ -34,48 +39,23 @@ const fallbackJobs = [
     skills: ["SQL", "Dashboard", "A/B Test"],
     reason: "정량 성과와 문제 정의 역량을 만들기 좋은 공고",
     url: "diagnosis.html",
-  },
-  {
-    title: "Product Manager Intern",
-    company: "모바일 서비스 스타트업",
-    category: "product",
-    location: "서울 · 인턴",
-    deadline: "D-7",
-    fit: 82,
-    skills: ["UX Research", "기획", "데이터 해석"],
-    reason: "대외활동·운영 경험을 프로덕트 언어로 바꾸기 좋음",
-    url: "diagnosis.html",
-  },
-  {
-    title: "Backend Developer Rookie",
-    company: "핀테크 플랫폼",
-    category: "dev",
-    location: "서울 · 신입",
-    deadline: "D-18",
-    fit: 80,
-    skills: ["API", "DB", "협업"],
-    reason: "서버 프로젝트와 장애 해결 경험을 강조하기 좋은 공고",
-    url: "diagnosis.html",
-  },
-  {
-    title: "Growth Marketer Intern",
-    company: "에듀테크 기업",
-    category: "product",
-    location: "원격 가능",
-    deadline: "D-21",
-    fit: 77,
-    skills: ["콘텐츠", "실험", "분석"],
-    reason: "캠페인·대외활동 경험을 수치 성과로 확장하기 좋음",
-    url: "diagnosis.html",
+    source: "샘플",
   },
 ];
 
-const CACHE_KEY = "hicareer-popular-jobs";
 const CACHE_TTL = 10 * 60 * 1000;
+let currentJobs = [];
+let activeFilter = "all";
+let searchTimer;
+let activeRequestId = 0;
 
-function getCachedJobs() {
+function getCacheKey(keyword) {
+  return `hicareer-popular-jobs:${keyword}`;
+}
+
+function getCachedJobs(keyword) {
   try {
-    const cached = JSON.parse(sessionStorage.getItem(CACHE_KEY));
+    const cached = JSON.parse(sessionStorage.getItem(getCacheKey(keyword)));
     if (!cached || Date.now() - cached.savedAt > CACHE_TTL) return null;
     return cached.jobs;
   } catch {
@@ -83,33 +63,52 @@ function getCachedJobs() {
   }
 }
 
-function setCachedJobs(jobs) {
+function setCachedJobs(keyword, jobs) {
   try {
-    sessionStorage.setItem(CACHE_KEY, JSON.stringify({ jobs, savedAt: Date.now() }));
+    sessionStorage.setItem(getCacheKey(keyword), JSON.stringify({ jobs, savedAt: Date.now() }));
   } catch {
     return;
   }
 }
 
-async function fetchPopularJobs() {
-  const cachedJobs = getCachedJobs();
+function setStatus(message) {
+  if (jobSearchStatus) jobSearchStatus.textContent = message;
+}
+
+function renderSkeleton() {
+  popularJobsContainer.innerHTML = `
+    <article class="job-card skeleton"></article>
+    <article class="job-card skeleton"></article>
+    <article class="job-card skeleton"></article>
+  `;
+}
+
+async function fetchPopularJobs(keyword) {
+  const normalizedKeyword = keyword.trim() || "AI 인턴";
+  const cachedJobs = getCachedJobs(normalizedKeyword);
   if (cachedJobs) return cachedJobs;
 
-  try {
-    const response = await fetch("/api/jobs/popular?limit=6");
-    if (!response.ok) throw new Error("Popular jobs API unavailable");
-    const payload = await response.json();
-    const jobs = Array.isArray(payload) ? payload : payload.jobs;
-    if (!Array.isArray(jobs)) throw new Error("Unexpected jobs API response");
-    setCachedJobs(jobs);
-    return jobs;
-  } catch {
-    return fallbackJobs;
-  }
+  const response = await fetch(`/api/jobs/popular?limit=12&keyword=${encodeURIComponent(normalizedKeyword)}`);
+  if (!response.ok) throw new Error("Popular jobs API unavailable");
+  const payload = await response.json();
+  const jobs = Array.isArray(payload) ? payload : payload.jobs;
+  if (!Array.isArray(jobs)) throw new Error("Unexpected jobs API response");
+  setCachedJobs(normalizedKeyword, jobs);
+  return jobs;
 }
 
 function renderJobs(jobs, filter = "all") {
   const visibleJobs = filter === "all" ? jobs : jobs.filter((job) => job.category === filter);
+
+  if (!visibleJobs.length) {
+    popularJobsContainer.innerHTML = `
+      <article class="empty-card">
+        <h3>해당 필터의 공고가 아직 없어요.</h3>
+        <p>다른 키워드로 검색하거나 전체 필터를 선택해보세요.</p>
+      </article>
+    `;
+    return;
+  }
 
   popularJobsContainer.innerHTML = visibleJobs
     .map(
@@ -125,25 +124,55 @@ function renderJobs(jobs, filter = "all") {
           <p class="job-meta">${job.location}</p>
           <div class="skill-row">${job.skills.map((skill) => `<span>${skill}</span>`).join("")}</div>
           <p class="job-reason">${job.reason}</p>
-          <a href="${job.url}">내 CV와 비교하기</a>
+          <a href="${job.url}" target="_blank" rel="noopener noreferrer">공고 보기</a>
         </article>
       `,
     )
     .join("");
 }
 
-async function initializePopularJobs() {
+async function runJobSearch() {
+  if (!popularJobsContainer || !jobSearchInput) return;
+
+  const requestId = ++activeRequestId;
+  const keyword = jobSearchInput.value.trim() || "AI 인턴";
+  renderSkeleton();
+  setStatus(`“${keyword}” 공고를 실시간으로 검색 중입니다.`);
+
+  try {
+    const jobs = await fetchPopularJobs(keyword);
+    if (requestId !== activeRequestId) return;
+    currentJobs = jobs.length ? jobs : fallbackJobs;
+    renderJobs(currentJobs, activeFilter);
+    setStatus(`“${keyword}” 기준 ${currentJobs.length}개 공고를 불러왔습니다.`);
+  } catch {
+    if (requestId !== activeRequestId) return;
+    currentJobs = fallbackJobs;
+    renderJobs(currentJobs, activeFilter);
+    setStatus("외부 검색이 잠시 불안정해 샘플 공고를 표시합니다.");
+  }
+}
+
+function scheduleJobSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runJobSearch, 450);
+}
+
+function initializePopularJobs() {
   if (!popularJobsContainer) return;
-  const jobs = await fetchPopularJobs();
-  renderJobs(jobs);
 
   jobFilters.forEach((button) => {
     button.addEventListener("click", () => {
+      activeFilter = button.dataset.jobFilter;
       jobFilters.forEach((filterButton) => filterButton.classList.remove("active"));
       button.classList.add("active");
-      renderJobs(jobs, button.dataset.jobFilter);
+      renderJobs(currentJobs, activeFilter);
     });
   });
+
+  jobSearchInput?.addEventListener("input", scheduleJobSearch);
+  jobSearchButton?.addEventListener("click", runJobSearch);
+  runJobSearch();
 }
 
 initializePopularJobs();

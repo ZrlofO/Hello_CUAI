@@ -49,13 +49,21 @@
           </div>
           <a class="button secondary" href="diagnosis.html">내 CV와 비교하기</a>
         </div>
+        <div class="job-search-panel">
+          <label for="jobSearchInput">실시간 채용 검색</label>
+          <div class="job-search-box">
+            <input id="jobSearchInput" type="search" value="AI 인턴" placeholder="예: 프론트엔드 신입, 데이터 분석 인턴, PM 인턴" />
+            <button class="button primary" id="jobSearchButton" type="button">검색</button>
+          </div>
+          <p id="jobSearchStatus">사람인·잡코리아에서 현재 공고를 불러오는 중입니다.</p>
+        </div>
         <div class="job-toolbar">
           <button class="job-filter active" data-job-filter="all" type="button">전체</button>
           <button class="job-filter" data-job-filter="ai" type="button">AI·데이터</button>
           <button class="job-filter" data-job-filter="dev" type="button">개발</button>
           <button class="job-filter" data-job-filter="product" type="button">기획</button>
         </div>
-        <div class="jobs-grid" id="popularJobs" aria-live="polite">
+        <div class="jobs-grid live-scroll" id="popularJobs" aria-live="polite">
           <article class="job-card skeleton"></article>
           <article class="job-card skeleton"></article>
           <article class="job-card skeleton"></article>

@@ -19,7 +19,7 @@ WORK24_ENDPOINT = "https://www.work24.go.kr/cm/openApi/call/wk/callOpenApiSvcInf
 CACHE_TTL_SECONDS = int(os.getenv("JOBS_CACHE_TTL_SECONDS", "600"))
 DEFAULT_JOB_KEYWORD = os.getenv("JOB_SEARCH_KEYWORD", "신입 개발 데이터 AI")
 
-_cache = {"saved_at": 0, "jobs": None}
+_cache = {}
 
 FALLBACK_JOBS = [
     {
@@ -273,8 +273,10 @@ def parse_work24_xml(xml_text, limit):
 
 
 def fetch_popular_jobs(limit, keyword=DEFAULT_JOB_KEYWORD):
-    if _cache["jobs"] and time.time() - _cache["saved_at"] < CACHE_TTL_SECONDS:
-        return _cache["jobs"][:limit]
+    cache_key = f"web:{keyword}:{limit}"
+    cached = _cache.get(cache_key)
+    if cached and time.time() - cached["saved_at"] < CACHE_TTL_SECONDS:
+        return cached["jobs"][:limit]
 
     web_jobs = merge_jobs(
         scrape_saramin_jobs(keyword, limit),
@@ -282,14 +284,18 @@ def fetch_popular_jobs(limit, keyword=DEFAULT_JOB_KEYWORD):
         limit=limit,
     )
     if web_jobs:
-        _cache["saved_at"] = time.time()
-        _cache["jobs"] = web_jobs
+        _cache[cache_key] = {"saved_at": time.time(), "jobs": web_jobs}
         return web_jobs[:limit]
 
     return fetch_work24_jobs(limit)
 
 
 def fetch_work24_jobs(limit):
+    cache_key = f"work24:{limit}"
+    cached = _cache.get(cache_key)
+    if cached and time.time() - cached["saved_at"] < CACHE_TTL_SECONDS:
+        return cached["jobs"][:limit]
+
     if not WORK24_AUTH_KEY:
         return FALLBACK_JOBS[:limit]
 
@@ -311,8 +317,7 @@ def fetch_work24_jobs(limit):
     if not jobs:
         return FALLBACK_JOBS[:limit]
 
-    _cache["saved_at"] = time.time()
-    _cache["jobs"] = jobs
+    _cache[cache_key] = {"saved_at": time.time(), "jobs": jobs}
     return jobs[:limit]
 
 
