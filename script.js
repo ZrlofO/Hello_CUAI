@@ -138,13 +138,22 @@ function setCompletedAction(id, done) {
 }
 
 function renderList(items) {
-  return items?.length ? `<ul>${items.map((item) => `<li>${item}</li>`).join("")}</ul>` : "";
+  return items?.length ? `<ul>${items.map((item) => `<li>${formatListItem(item)}</li>`).join("")}</ul>` : "";
+}
+
+function formatListItem(item) {
+  if (!item || typeof item !== "object") return escapeHtml(item || "");
+  return escapeHtml(
+    item.gap
+      || item.gap_name
+      || item.title
+      || item.recommended_action
+      || Object.values(item).filter(Boolean).slice(0, 3).join(" · ")
+  );
 }
 
 function renderLlmReport(report) {
-  if (!report || report.error) {
-    return report?.error ? `<p class="extract-meta">LLM 리포트 fallback: ${report.error}</p>` : "";
-  }
+  if (!report) return "";
 
   return `
     <div class="llm-report">
@@ -284,6 +293,7 @@ function renderFeedbackLoop(loop) {
   const classification = consult.final_classification || {};
   const reviews = loop.supportingReviews || {};
   const reviewEntries = Object.entries(reviews);
+  const recommendations = consult.recommendations || [];
 
   return `
     <div class="feedback-loop">
@@ -372,6 +382,20 @@ function renderFeedbackLoop(loop) {
           <div><strong>다음 Action</strong>${renderList(report.next_actions || [])}</div>
         </div>
       </div>
+
+      ${recommendations.length ? `
+        <div class="retrieval-recommendations">
+          <h5>Retrieval 기반 추천 후보</h5>
+          ${recommendations.map((item) => `
+            <article>
+              <strong>${item.title || "추천 후보"}</strong>
+              <p>${item.why_recommended || item.expected_cv_value || ""}</p>
+              <small>${item.source || item.type || ""}${item.deadline ? ` · ${item.deadline}` : ""}${item.status_note ? ` · ${item.status_note}` : ""}</small>
+              ${item.url ? `<a href="${item.url}" target="_blank" rel="noopener noreferrer">출처 확인</a>` : ""}
+            </article>
+          `).join("")}
+        </div>
+      ` : ""}
     </div>
   `;
 }
@@ -474,7 +498,13 @@ async function analyzeManualStream() {
     buffer = lines.pop() || "";
     for (const line of lines) {
       if (!line.trim()) continue;
-      const item = JSON.parse(line);
+      let item;
+      try {
+        item = JSON.parse(line);
+      } catch {
+        setLiveStatus("실시간 메시지 일부가 깨져 건너뛰고 있습니다. 분석은 계속 진행 중입니다.");
+        continue;
+      }
       if (item.event === "status") {
         setLiveStatus(item.payload?.message || "");
       }
@@ -626,7 +656,7 @@ async function renderReport() {
     const data = await analyzeManualStream();
     renderAnalysis(data);
   } catch (error) {
-    renderMessage("분석 실패", error.message, ["백엔드는 `python3 server.py`로 실행해야 하고, PDF 정리는 OPENAI_API_KEY가 필요합니다."]);
+    renderMessage("기본 결과로 전환", "실시간 Agent 대화를 끝까지 표시하지 못했습니다.", ["입력한 Metadata는 유지되어 있습니다. 잠시 후 Agent 실행을 다시 눌러주세요."]);
   } finally {
     analyzeButton.disabled = false;
   }

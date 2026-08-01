@@ -1306,6 +1306,7 @@ button:disabled {
 .activated-agents,
 .supporting-reviews,
 .consult-final,
+.retrieval-recommendations,
 .recommendation-list {
   display: grid;
   gap: 10px;
@@ -1362,6 +1363,7 @@ button:disabled {
 
 .chat-bubble p {
   margin: 0;
+  white-space: pre-wrap;
 }
 
 .chat-row.leading .chat-bubble span {
@@ -1397,6 +1399,7 @@ button:disabled {
 }
 
 .review-grid > div,
+.retrieval-recommendations article,
 .recommendation-list section {
   padding: 14px;
   border-radius: 14px;
@@ -1405,9 +1408,20 @@ button:disabled {
 }
 
 .review-grid strong,
+.retrieval-recommendations strong,
 .recommendation-list strong,
 .activated-agents strong {
   color: var(--navy-900);
+}
+
+.retrieval-recommendations article {
+  display: grid;
+  gap: 6px;
+}
+
+.retrieval-recommendations a {
+  color: var(--aqua);
+  font-weight: 800;
 }
 
 @media (max-width: 700px) {
