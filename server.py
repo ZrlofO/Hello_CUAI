@@ -142,6 +142,10 @@ def normalize_deadline(close_date):
 def clean_text(value):
     value = re.sub(r"<[^>]+>", " ", value)
     value = html.unescape(value)
+    value = re.sub(r"([a-z])([A-Z])", r"\1 \2", value)
+    value = re.sub(r"([A-Z]{2,})([A-Z][a-z])", r"\1 \2", value)
+    value = re.sub(r"([A-Za-z])([0-9])", r"\1 \2", value)
+    value = re.sub(r"([0-9])([A-Za-z])", r"\1 \2", value)
     value = re.sub(r"\s+", " ", value)
     return value.strip(" -|\n\t")
 
@@ -552,6 +556,124 @@ def tokenize(text):
     return [token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9+#.]{1,}|[가-힣]{2,}", text)]
 
 
+STOPWORDS = {
+    "and", "or", "the", "a", "an", "to", "of", "in", "on", "for", "with", "by", "from", "as", "at", "is", "are",
+    "my", "our", "your", "their", "this", "that", "these", "those", "using", "used", "based", "across", "including",
+    "experience", "candidate", "present", "expected", "advisor", "author", "authors", "abstract", "email", "phone",
+    "kyuan", "oh", "kyuanoh", "chung", "ang", "university", "cau", "cuai", "seoul", "korea", "bumsoo", "kim",
+    "award", "paper", "summer", "winter", "conference", "proceedings", "equal", "contribution", "correspondingauthor",
+    "under", "review", "submitted", "proceedingsofthe", "th",
+    "서울", "경력무관", "학력무관", "대졸", "계약직", "인턴직", "정규직", "등록일", "수정일", "채용", "공고",
+}
+
+PHRASE_ALIASES = {
+    "vision language": "vision-language",
+    "vision language models": "vision-language models",
+    "large vision language models": "large vision-language models",
+    "open source": "open-source",
+    "artificial intelligence": "artificial intelligence",
+    "machine learning": "machine learning",
+    "deep learning": "deep learning",
+}
+
+
+def normalize_phrase(phrase):
+    phrase = clean_text(phrase).lower()
+    phrase = phrase.replace("–", "-").replace("—", "-")
+    phrase = re.sub(r"[^a-z0-9가-힣+#.\-\s]", " ", phrase)
+    phrase = re.sub(r"\s+", " ", phrase).strip()
+    return PHRASE_ALIASES.get(phrase, phrase)
+
+
+def split_glued_function_words(token):
+    token = re.sub(r"(diagnosis|distillation|representation|processing|grounding)(and|via|with|for|from|to)$", r"\1 \2", token)
+    token = re.sub(r"(research|candidate|developed|designed|conducted)(in|on|for|with)$", r"\1 \2", token)
+    return token.split()
+
+
+def phrase_tokens(text):
+    raw_tokens = tokenize(text)
+    tokens = []
+    for token in raw_tokens:
+        tokens.extend(split_glued_function_words(token))
+    return [
+        token
+        for token in tokens
+        if token not in STOPWORDS
+        and not token.isdigit()
+        and 1 < len(token) <= 28
+        and not re.fullmatch(r"[a-z]*[0-9][a-z0-9]*", token)
+    ]
+
+
+def extract_keyphrases(text, top_n=12):
+    tokens = phrase_tokens(text)
+    scores = {}
+    for size in (1, 2, 3):
+        for index in range(0, max(0, len(tokens) - size + 1)):
+            phrase = normalize_phrase(" ".join(tokens[index:index + size]))
+            if not phrase or phrase in STOPWORDS:
+                continue
+            parts = phrase.split()
+            if any(part in STOPWORDS for part in parts):
+                continue
+            if len(set(parts)) < len(parts):
+                continue
+            if size == 1 and len(phrase) <= 2:
+                continue
+            length_bonus = 1 + (size - 1) * 0.55
+            technical_bonus = 1.45 if re.search(r"ai|llm|vlm|vision|language|model|token|pruning|distillation|python|pytorch|react|sql|agent|rag|multimodal|projector|perception|데이터|분석", phrase) else 1
+            metadata_penalty = 0.45 if re.search(r"university|conference|award|paper|kyuan|bumsoo|cuai|scholarship", phrase) else 1
+            scores[phrase] = scores.get(phrase, 0) + length_bonus * technical_bonus * metadata_penalty
+
+    ranked = sorted(scores.items(), key=lambda item: (item[1], len(item[0])), reverse=True)
+    selected = []
+    for phrase, score in ranked:
+        if any(phrase != chosen and phrase in chosen for chosen in selected):
+            continue
+        selected.append(phrase)
+        if len(selected) >= top_n:
+            break
+    return selected
+
+
+def overlap_phrases(left, right):
+    left_set = set(left)
+    right_set = set(right)
+    exact = left_set & right_set
+    fuzzy = set()
+    for left_phrase in left_set:
+        for right_phrase in right_set:
+            if left_phrase == right_phrase:
+                continue
+            if len(left_phrase) >= 5 and len(right_phrase) >= 5 and (left_phrase in right_phrase or right_phrase in left_phrase):
+                fuzzy.add(left_phrase if len(left_phrase) <= len(right_phrase) else right_phrase)
+    return list(exact | fuzzy)
+
+
+def evidence_signals(cv_text):
+    signals = []
+    compact = compact_text(cv_text)
+    checks = [
+        ("research intern", "리서치 인턴"),
+        ("publication", "논문/출판"),
+        ("accepted", "논문 accept"),
+        ("conference", "학회"),
+        ("award", "수상"),
+        ("prize", "대회 수상"),
+        ("hackathon", "해커톤"),
+        ("leaderboard", "리더보드 성과"),
+        ("president", "리더십"),
+        ("scholarship", "장학"),
+        ("github", "GitHub"),
+        ("open source", "오픈소스"),
+        ("kaist", "KAIST 연구 경험"),
+    ]
+    for keyword, label in checks:
+        if compact_text(keyword) in compact:
+            signals.append(label)
+    return list(dict.fromkeys(signals))
+
 def compact_text(text):
     return re.sub(r"[^a-z0-9가-힣]+", "", text.lower())
 
@@ -608,40 +730,42 @@ def job_document(job):
     )
 
 
-def explain_job_fit(cv_skills, job_skills, similarity):
-    matched = [skill for skill in job_skills if skill in cv_skills]
-    missing = [skill for skill in job_skills if skill not in cv_skills]
+def explain_job_fit(matched_phrases, missing_phrases, similarity):
     reasons = []
-    if matched:
-        reasons.append(f"일치 역량: {', '.join(matched[:4])}")
+    if matched_phrases:
+        reasons.append(f"겹치는 핵심 표현: {', '.join(matched_phrases[:4])}")
     if similarity > 0.18:
-        reasons.append("CV 문맥과 공고 설명의 유사도가 높습니다.")
+        reasons.append("CV 전체 문맥과 공고 설명의 유사도가 높습니다.")
     if not reasons:
-        reasons.append("직무 키워드가 일부 겹치지만 증거 보강이 필요합니다.")
-    gaps = [GAP_RECOMMENDATIONS.get(skill, f"{skill} 역량을 증명할 결과물을 추가하세요.") for skill in missing[:3]]
+        reasons.append("공고와 직접 겹치는 표현이 적어 지원 문장 재구성이 필요합니다.")
+
+    gaps = [f"공고에서 보이는 `{phrase}` 근거를 CV에서 더 명확히 보여주세요." for phrase in missing_phrases[:3]]
     if not gaps:
-        gaps = ["성과 수치, 배포 링크, 협업 역할을 더 선명하게 적으면 fit이 올라갑니다."]
+        gaps = ["성과 수치, 대표 프로젝트 링크, 본인 기여도를 더 선명하게 적으면 fit이 올라갑니다."]
     return reasons, gaps
 
 
 def rank_jobs_for_cv(cv_text, jobs, target_role):
     cv_vector = vectorize(f"{target_role} {cv_text}")
-    cv_skills = extract_profile_skills(cv_text)
+    cv_phrases = extract_keyphrases(cv_text, top_n=24)
     ranked = []
     for job in jobs:
         document = job_document(job)
         job_vector = vectorize(document)
-        job_skills = list(dict.fromkeys([*job.get("skills", []), *extract_profile_skills(document)]))
+        job_phrases = extract_keyphrases(document, top_n=14)
+        matched_phrases = overlap_phrases(cv_phrases, job_phrases)
+        missing_phrases = [phrase for phrase in job_phrases if phrase not in matched_phrases]
         similarity = cosine_similarity(cv_vector, job_vector)
-        overlap = len(set(cv_skills) & set(job_skills)) / max(len(set(job_skills)), 1)
+        overlap = len(matched_phrases) / max(len(job_phrases), 1)
         title_bonus = 0.12 if target_role and any(token in document.lower() for token in tokenize(target_role)) else 0
-        score = round(min(98, max(45, 58 + similarity * 55 + overlap * 26 + title_bonus * 100)))
-        reasons, gaps = explain_job_fit(cv_skills, job_skills, similarity)
+        score = round(min(98, max(45, 56 + similarity * 58 + overlap * 30 + title_bonus * 100)))
+        reasons, gaps = explain_job_fit(matched_phrases, missing_phrases, similarity)
         ranked_job = dict(job)
         ranked_job["fit"] = score
         ranked_job["similarity"] = round(similarity, 3)
-        ranked_job["matchedSkills"] = [skill for skill in job_skills if skill in cv_skills]
-        ranked_job["missingSkills"] = [skill for skill in job_skills if skill not in cv_skills][:4]
+        ranked_job["skills"] = job_phrases[:5]
+        ranked_job["matchedSkills"] = matched_phrases[:6]
+        ranked_job["missingSkills"] = missing_phrases[:5]
         ranked_job["fitReasons"] = reasons
         ranked_job["gaps"] = gaps
         ranked.append(ranked_job)
@@ -649,40 +773,36 @@ def rank_jobs_for_cv(cv_text, jobs, target_role):
 
 
 def build_cv_summary(cv_text, target_role):
-    skills = extract_profile_skills(cv_text)
-    proof_terms = [
-        "research intern", "intern", "accepted", "publication", "conference", "paper", "manuscript",
-        "award", "prize", "scholarship", "hackathon", "contest", "leaderboard", "논문", "수상", "인턴", "해커톤",
-    ]
-    project_terms = ["project", "research", "developed", "designed", "evaluated", "pipeline", "model", "프로젝트", "개발", "분석", "모델"]
-    proof_count = count_keyword_hits(cv_text, proof_terms)
+    keyphrases = extract_keyphrases(cv_text, top_n=14)
+    signals = evidence_signals(cv_text)
     strengths = []
     gaps = []
 
-    if skills:
-        strengths.append(f"확인된 핵심 역량: {', '.join(skills[:8])}")
-    if count_keyword_hits(cv_text, ["research intern", "kaist", "lab", "advisor"]):
-        strengths.append("리서치 인턴 경험이 있어 AI 연구/개발 인턴 포지션에서 신뢰도가 높습니다.")
-    if count_keyword_hits(cv_text, ["accepted", "publication", "conference", "paper", "manuscript"]):
+    if keyphrases:
+        strengths.append(f"CV에서 자동 추출된 핵심 표현: {', '.join(keyphrases[:8])}")
+    if signals:
+        strengths.append(f"확인된 외부 증거: {', '.join(signals[:8])}")
+    if any("intern" in phrase or "research" in phrase for phrase in keyphrases) or "리서치 인턴" in signals:
+        strengths.append("연구/인턴 경험이 목표 직무와 연결될 수 있는 강한 근거입니다.")
+    if any(signal in signals for signal in ["논문/출판", "논문 accept", "학회"]):
         strengths.append("논문·학회 실적이 있어 연구 역량을 외부 결과로 증명하고 있습니다.")
-    if count_keyword_hits(cv_text, ["award", "prize", "scholarship", "leaderboard", "hackathon", "contest"]):
-        strengths.append("수상·장학·대회 성과가 있어 외부 검증 근거가 충분합니다.")
-    if count_keyword_hits(cv_text, project_terms):
-        strengths.append("프로젝트와 연구 경험을 공고 요구역량에 맞춰 재배치하기 좋습니다.")
+    if any(signal in signals for signal in ["수상", "대회 수상", "해커톤", "리더보드 성과", "장학"]):
+        strengths.append("수상·대회·장학 성과가 있어 외부 검증 근거가 충분합니다.")
 
-    if not count_keyword_hits(cv_text, ["github", "code", "repository", "demo", "deploy", "open source", "open-source"]):
-        gaps.append("연구 성과는 강하지만 코드/데모/GitHub 링크가 약하면 구현 역량 전달력이 떨어질 수 있습니다.")
-    if not count_keyword_hits(cv_text, ["latency", "throughput", "accuracy", "benchmark", "flops", "speed", "performance"]):
-        gaps.append("AI 인턴 지원에서는 성능 지표, latency, benchmark 같은 정량 결과를 더 앞에 배치하면 좋습니다.")
-    if not count_keyword_hits(cv_text, ["production", "service", "api", "deployment", "docker", "cloud"]):
-        gaps.append("산업체 개발 인턴을 노린다면 연구 외에 배포/서비스화 경험을 보강하면 fit이 올라갑니다.")
+    if not any(signal in signals for signal in ["GitHub", "오픈소스"]):
+        gaps.append("코드/GitHub/오픈소스 링크가 약하면 구현 역량 전달력이 떨어질 수 있습니다.")
+    if not any(phrase in " ".join(keyphrases) for phrase in ["benchmark", "accuracy", "latency", "performance", "evaluation"]):
+        gaps.append("성과를 benchmark, accuracy, latency, performance 같은 정량 표현으로 더 앞에 배치하면 좋습니다.")
+    if target_role and "intern" not in compact_text(cv_text) and "인턴" not in cv_text:
+        gaps.append("인턴 공고에 맞춰 실무 협업/팀 프로젝트 경험을 더 명확히 보여주세요.")
     if len(cv_text) < 500:
         gaps.append("CV 텍스트가 짧습니다. 성과 수치, 사용 기술, 결과 링크를 더 넣어야 정확도가 올라갑니다.")
 
     return {
         "targetRole": target_role or "목표 직무 미입력",
         "extractedCharacters": len(cv_text),
-        "skills": skills,
+        "skills": keyphrases,
+        "evidenceSignals": signals,
         "strengths": strengths or ["목표 직무를 더 구체화하면 강점 포지셔닝이 선명해집니다."],
         "gaps": gaps or ["외부 검증은 충분합니다. 이제 목표 공고별 요구 역량 순서에 맞춰 CV 문장을 재배치하세요."],
     }
