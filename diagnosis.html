@@ -14,45 +14,43 @@
       <nav class="nav">
         <a class="brand" href="index.html"><span class="brand-mark">HI</span><span>HICAREER</span></a>
         <div class="nav-links">
-          <a href="index.html">홈</a><a class="active" href="diagnosis.html">진단</a><a href="report.html">리포트</a><a href="opportunities.html">활동 추천</a><a href="plan.html">성장 플랜</a>
+          <a href="index.html">홈</a><a class="active" href="diagnosis.html">진단</a>
         </div>
-        <a class="nav-cta" href="report.html">리포트 보기</a>
+        <a class="nav-cta" href="diagnosis.html">Agent 실행</a>
       </nav>
     </header>
 
     <main class="page-shell">
       <section class="page-title">
-        <span class="eyebrow">Step 1</span>
-        <h1>먼저 CV PDF가 있는지 알려주세요.</h1>
-        <p>PDF가 있으면 업로드하고, 없다면 질문형 입력으로 현재 스펙을 정리합니다.</p>
+        <span class="eyebrow">Career Diagnosis</span>
+        <h1>이력서를 넣고, 목표 직무에 맞는 준비 방향을 확인하세요.</h1>
+        <p>PDF를 업로드하거나 직접 입력하면 HICAREER가 강점, 보완할 경험, 다음 행동을 정리합니다.</p>
       </section>
 
       <section class="diagnosis-panel">
         <div class="choice-grid" id="choiceGrid">
-          <button class="choice-card" id="hasPdfButton" type="button"><span>PDF 있음</span><strong>CV 파일 업로드</strong><small>파일 기반 진단 흐름으로 이동합니다.</small></button>
-          <button class="choice-card" id="noPdfButton" type="button"><span>PDF 없음</span><strong>질문으로 스펙 입력</strong><small>목표 직무와 경험을 직접 입력합니다.</small></button>
+          <button class="choice-card" id="hasPdfButton" type="button"><span>PDF로 시작</span><strong>이력서 파일 업로드</strong><small>PDF 내용을 항목별로 정리한 뒤 직접 수정할 수 있습니다.</small></button>
+          <button class="choice-card" id="noPdfButton" type="button"><span>직접 입력</span><strong>내 경험 직접 작성</strong><small>PDF가 없어도 목표 직무와 경험을 바로 입력할 수 있습니다.</small></button>
         </div>
 
         <div class="input-mode" id="pdfMode">
-          <div class="mode-header"><div><span class="step-label">Step 2A</span><h3>CV PDF 업로드</h3></div><button class="text-button" id="backFromPdf" type="button">다시 선택</button></div>
-          <label class="role-field">목표 직무<input id="pdfRoleInput" type="text" placeholder="예: AI 인턴, 프론트엔드 신입, 데이터 분석가" /></label>
-          <label class="upload-box" for="cvFile"><input id="cvFile" type="file" accept="application/pdf,.pdf" /><span class="upload-icon">PDF</span><strong id="fileName">이력서 또는 CV 파일을 올려주세요.</strong><small>PDF를 선택하면 자동으로 업로드하고 Metadata로 분류합니다.</small></label>
-          <button class="button secondary full" id="extractButton" type="button">선택한 PDF 다시 업로드하기</button>
+          <div class="mode-header"><div><h3>이력서 파일 업로드</h3><p>먼저 이력서 내용을 정리한 뒤, 다음 화면에서 목표 직무를 입력합니다.</p></div><button class="text-button" id="backFromPdf" type="button">다른 방식 선택</button></div>
+          <label class="upload-box" for="cvFile"><input id="cvFile" type="file" accept="application/pdf,.pdf" /><span class="upload-icon">PDF</span><strong id="fileName">이력서 또는 CV 파일을 올려주세요.</strong><small>파일을 선택하면 자동으로 내용을 정리합니다. 아래 진행 상태를 확인하세요.</small></label>
         </div>
 
         <div class="input-mode" id="manualMode">
           <section class="metadata-editor" id="metadataEditor" aria-label="CV metadata editor">
             <div class="editor-heading">
-              <div><span class="step-label">Step 2</span><h3>Metadata 검토 및 수정</h3></div>
-              <p>Agent가 분류한 내용을 확인하고, 사실과 다른 부분은 직접 수정하세요. 판단이나 점수는 추가하지 않습니다.</p>
+              <div><h3>이력서 내용 검토</h3></div>
+              <p>정리된 내용을 확인하고, 빠진 경험이나 잘못된 표현을 수정하세요.</p>
             </div>
             <div class="metadata-sections" id="metadataSections"></div>
           </section>
 
           <section class="preferences-editor" id="preferencesEditor" aria-label="사용자 선호 입력">
             <div class="editor-heading">
-              <div><span class="step-label">Step 3</span><h3>사용자 선호를 알려주세요</h3></div>
-              <p>이 값은 Agent가 분석 방향과 추천 활동을 정하는 데 사용됩니다.</p>
+              <div><h3>지원 목표 입력</h3></div>
+              <p>목표 직무와 준비 기간을 알려주면 분석 기준이 더 선명해집니다.</p>
             </div>
             <div class="preference-grid">
               <label>희망 직무 <input id="preferenceRole" type="text" placeholder="예: 데이터 분석 인턴" /></label>
@@ -62,8 +60,8 @@
           </section>
         </div>
 
-        <button class="button primary full hidden" id="analyzeButton" type="button">검토한 Metadata와 선호로 Agent 실행하기</button>
-        <div class="result-card" id="resultCard"><span class="result-label">대기 중</span><h3>입력 방식 선택 후 분석을 시작하세요.</h3><ul><li>분석 후 샘플 리포트 페이지로 이동할 수 있습니다.</li></ul></div>
+        <button class="button primary full hidden" id="analyzeButton" type="button">내 이력서 진단하기</button>
+        <div class="result-card" id="resultCard"><span class="result-label">준비 완료</span><h3>입력 방식을 선택하면 진단을 시작할 수 있습니다.</h3><ul><li>분석 결과는 이 화면에서 바로 확인됩니다.</li></ul></div>
       </section>
     </main>
     <script src="script.js?v=metadata-upload-fix"></script>

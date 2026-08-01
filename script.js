@@ -6,8 +6,6 @@ const pdfMode = document.querySelector("#pdfMode");
 const manualMode = document.querySelector("#manualMode");
 const cvFile = document.querySelector("#cvFile");
 const fileName = document.querySelector("#fileName");
-const pdfRoleInput = document.querySelector("#pdfRoleInput");
-const extractButton = document.querySelector("#extractButton");
 const analyzeButton = document.querySelector("#analyzeButton");
 const resultCard = document.querySelector("#resultCard");
 let liveLaneState = {};
@@ -88,7 +86,7 @@ function getMetadata() {
 }
 
 function getPreferences() {
-  return { target_role: document.querySelector("#preferenceRole")?.value.trim() || pdfRoleInput.value.trim(), preparation_period: document.querySelector("#preferencePeriod")?.value.trim() || "", additional_user_input: document.querySelector("#preferenceAdditional")?.value.trim() || "" };
+  return { target_role: document.querySelector("#preferenceRole")?.value.trim() || "", preparation_period: document.querySelector("#preferencePeriod")?.value.trim() || "", additional_user_input: document.querySelector("#preferenceAdditional")?.value.trim() || "" };
 }
 
 function getManualText() {
@@ -140,6 +138,64 @@ function setCompletedAction(id, done) {
 
 function renderList(items) {
   return items?.length ? `<ul>${items.map((item) => `<li>${formatListItem(item)}</li>`).join("")}</ul>` : "";
+}
+
+
+function renderCompactList(items, limit = 3) {
+  const visible = (items || []).slice(0, limit);
+  if (!visible.length) return "<p class=\"muted-copy\">표시할 항목이 아직 없습니다.</p>";
+  const extra = (items || []).length - visible.length;
+  return `<ul>${visible.map((item) => `<li>${formatListItem(item)}</li>`).join("")}${extra > 0 ? `<li>외 ${extra}개 항목은 자세히 보기에서 확인</li>` : ""}</ul>`;
+}
+
+function plainText(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  return formatListItem(value);
+}
+
+function renderSlideDeck(title, slides = []) {
+  const safeSlides = slides.filter(Boolean);
+  if (!safeSlides.length) return "";
+  const deckId = `deck-${Math.random().toString(36).slice(2, 9)}`;
+  return `
+    <section class="slide-deck" id="${deckId}" data-current="0">
+      <div class="slide-deck-header">
+        <div>
+          <span class="result-label">자세히 보기</span>
+          <h4>${title}</h4>
+        </div>
+        <div class="slide-controls">
+          <button type="button" data-slide-prev aria-label="이전 카드">←</button>
+          <span data-slide-count>1 / ${safeSlides.length}</span>
+          <button type="button" data-slide-next aria-label="다음 카드">→</button>
+        </div>
+      </div>
+      <div class="slide-window">
+        <div class="slide-track">
+          ${safeSlides.map((slide) => `<article class="detail-slide">${slide}</article>`).join("")}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function bindSlideDecks() {
+  document.querySelectorAll(".slide-deck").forEach((deck) => {
+    const track = deck.querySelector(".slide-track");
+    const slides = deck.querySelectorAll(".detail-slide");
+    const counter = deck.querySelector("[data-slide-count]");
+    const update = (next) => {
+      const total = slides.length || 1;
+      const current = (next + total) % total;
+      deck.dataset.current = String(current);
+      if (track) track.style.transform = `translateX(-${current * 100}%)`;
+      if (counter) counter.textContent = `${current + 1} / ${total}`;
+    };
+    deck.querySelector("[data-slide-prev]")?.addEventListener("click", () => update(Number(deck.dataset.current || 0) - 1));
+    deck.querySelector("[data-slide-next]")?.addEventListener("click", () => update(Number(deck.dataset.current || 0) + 1));
+    update(0);
+  });
 }
 
 function formatListItem(item) {
@@ -530,11 +586,15 @@ function renderPlannerSection(planner = {}) {
 }
 
 function renderFeedbackLoop(loop) {
-  if (!loop) return renderWorkflowStep(5, "Calendar & Todo", "다음 행동을 계획하는 단계입니다.", renderPlannerSection({}), { current: true });
+  if (!loop) return renderPlannerSection ? renderPlannerSection({}) : "";
   if (loop.error) {
     return `
-      ${renderWorkflowStep(2, "Agent Feedback Loop", "분석 과정에서 일부 오류가 발생했습니다.", `<p>${escapeHtml(loop.error)}</p>`)}
-      ${renderWorkflowStep(5, "Calendar & Todo", "일정과 할 일을 확인하고 등록할 수 있습니다.", renderPlannerSection(loop.plannerResult || {}), { current: true })}
+      <div class="feedback-loop compact-result">
+        <span class="result-label">Agent Review</span>
+        <h4>Agent 검토를 실행하지 못했습니다.</h4>
+        <p>${escapeHtml(loop.error)}</p>
+        ${renderPlannerSection(loop.plannerResult || {})}
+      </div>
     `;
   }
 
@@ -544,108 +604,104 @@ function renderFeedbackLoop(loop) {
   const reviews = loop.supportingReviews || {};
   const reviewEntries = Object.entries(reviews);
   const recommendations = consult.recommendations || [];
+  const activatedAgents = loop.activatedAgents || [];
+  const conversations = loop.conversationLog || [];
   const planner = loop.plannerResult || {};
+  const priorityGaps = consult.priority_gaps || report.critical_gaps || [];
+  const focusItems = consult.recommended_focus || report.recommended_strategy || [];
+  const nextActions = report.next_actions || [];
 
-  return `
-    ${renderWorkflowStep(2, "Agent 대화 및 호출 판단", report.summary || "Leading Agent와 Consult Agent가 검토 범위를 정했습니다.", `
-      <div class="feedback-status">
-        <article>
-          <span>최종 상태</span>
-          <strong>${report.overall_status || classification.status || "분류 대기"}</strong>
-        </article>
-        <article>
-          <span>실행 방식</span>
-          <strong>${loop.mode || "multi_call"}</strong>
-        </article>
-        <article>
-          <span>활성화 Agent</span>
-          <strong>${(loop.activatedAgents || []).length}</strong>
-        </article>
+  const slides = [
+    `
+      <span class="slide-kicker">최종 판단</span>
+      <h5>${escapeHtml(report.overall_status || classification.status || "분석 결과")}</h5>
+      ${report.summary ? `<p>${escapeHtml(report.summary)}</p>` : ""}
+      <div class="slide-two-col">
+        <div><strong>우선 보완</strong>${renderCompactList(priorityGaps, 3)}</div>
+        <div><strong>추천 방향</strong>${renderCompactList(focusItems, 3)}</div>
       </div>
-
-      <div class="conversation-log discussion-flow">
-        <div class="agent-header">
-          <span class="result-label">Agent Conversation</span>
-          <h4>Global Agent Timeline</h4>
-        </div>
-        <div class="discussion-flow-list">
-          ${(loop.conversationLog || []).filter((item) => !item.lane && !item.agent_key).map(renderAgentConversationItem).join("")}
-        </div>
+    `,
+    `
+      <span class="slide-kicker">호출된 전문가</span>
+      <h5>${activatedAgents.length ? `${activatedAgents.length}개 영역을 추가 검토했습니다.` : "추가 전문가 호출이 필요하지 않습니다."}</h5>
+      <div class="mini-card-list">
+        ${activatedAgents.length ? activatedAgents.map((item) => `<article><strong>${escapeHtml(item.agent_name || "Expert Agent")}</strong><p>${escapeHtml(item.reason || "보완 가능성을 확인했습니다.")}</p></article>`).join("") : "<p>현재 입력만으로 큰 보완 영역이 확인되지 않았습니다.</p>"}
       </div>
-
-      <div class="activated-agents">
-        <h5>Consult Agent의 호출 판단</h5>
-        ${(loop.activatedAgents || []).map((item) => `
-          <article>
-            <strong>${item.agent_name}</strong>
-            <p>${item.reason}</p>
-          </article>
-        `).join("")}
-      </div>
-    `)}
-
-    ${renderWorkflowStep(3, "Supporting Agent 병렬 검토", "각 전문 Agent가 보완할 증거와 실행 방향을 검토했습니다.", `
-      <div class="supporting-reviews">
-        <h5>Supporting Agent 검토 결과</h5>
+    `,
+    reviewEntries.length ? `
+      <span class="slide-kicker">전문가 검토 요약</span>
+      <h5>영역별로 부족한 준비를 압축했습니다.</h5>
+      <div class="mini-card-list">
         ${reviewEntries.map(([key, review]) => `
           <article>
-            <span>${key}</span>
-            <h6>${review.agent_name || key}</h6>
-            <div class="review-grid">
-              <div>
-                <strong>충족된 기준</strong>
-                ${renderList(review.assessment?.fulfilled_requirements || [])}
-              </div>
-              <div>
-                <strong>부족하거나 약한 기준</strong>
-                ${renderList(review.assessment?.missing_or_weak_requirements || [])}
-              </div>
-              <div>
-                <strong>불명확한 지점</strong>
-                ${renderList(review.assessment?.unclear_points || [])}
-              </div>
-            </div>
-            <div class="recommendation-list">
-              ${(review.recommendations || []).map((item) => `
-                <section>
-                  <strong>${item.gap || "보완 항목"}</strong>
-                  <p>${item.recommended_action || ""}</p>
-                  <small>${item.reason || ""}${item.time_fit ? ` · ${item.time_fit}` : ""}</small>
-                </section>
-              `).join("")}
+            <strong>${escapeHtml(review.agent_name || key)}</strong>
+            <p>${escapeHtml(plainText((review.assessment?.missing_or_weak_requirements || [])[0]) || "큰 약점은 확인되지 않았습니다.")}</p>
+            ${renderCompactList((review.recommendations || []).map((item) => item.recommended_action || item.gap), 2)}
+          </article>
+        `).join("")}
+      </div>
+    ` : "",
+    nextActions.length ? `
+      <span class="slide-kicker">다음 행동</span>
+      <h5>지금 바로 할 일을 우선순위로 정리했습니다.</h5>
+      ${renderCompactList(nextActions, 5)}
+    ` : "",
+    recommendations.length ? `
+      <span class="slide-kicker">추천 후보</span>
+      <h5>보완에 도움이 되는 후보입니다.</h5>
+      <div class="mini-card-list">
+        ${recommendations.slice(0, 6).map((item) => `
+          <article>
+            <strong>${escapeHtml(item.title || "추천 후보")}</strong>
+            <p>${escapeHtml(item.why_recommended || item.expected_cv_value || "지원 준비에 참고할 수 있습니다.")}</p>
+            <small>${escapeHtml(item.source || item.type || "")}${item.deadline ? " · " + escapeHtml(item.deadline) : ""}</small>
+            ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">출처 보기</a>` : ""}
+          </article>
+        `).join("")}
+      </div>
+    ` : "",
+    planner && Object.keys(planner).length ? `
+      <span class="slide-kicker">Calendar & Todo</span>
+      <h5>실행 계획 초안</h5>
+      ${renderPlannerSection(planner)}
+    ` : "",
+  ];
+
+  const historyHtml = conversations.length ? `
+    <details class="agent-history">
+      <summary>
+        <span>Agent 실행 기록 보기</span>
+        <small>${conversations.length}개 메시지</small>
+      </summary>
+      <div class="history-list">
+        ${conversations.map((item, index) => `
+          <article>
+            <span>${String(index + 1).padStart(2, "0")}</span>
+            <div>
+              <strong>${escapeHtml(item.from || "Agent")} → ${escapeHtml(item.to || "Agent")}</strong>
+              <p>${escapeHtml(item.message || "")}</p>
             </div>
           </article>
         `).join("")}
       </div>
-    `)}
+    </details>
+  ` : "";
 
-    ${renderWorkflowStep(4, "Consult Agent 최종 통합", "검토 결과와 외부 검색 근거를 바탕으로 우선순위를 정했습니다.", `
-      <div class="consult-final">
-        <h5>Consult Agent 최종 통합</h5>
-        ${renderList(classification.reason || [])}
-        <div class="review-grid">
-          <div><strong>우선 보완 Gap</strong>${renderList(consult.priority_gaps || report.critical_gaps || [])}</div>
-          <div><strong>추천 Focus</strong>${renderList(consult.recommended_focus || report.recommended_strategy || [])}</div>
-          <div><strong>다음 Action</strong>${renderList(report.next_actions || [])}</div>
-        </div>
+  return `
+    <div class="feedback-loop compact-result">
+      <div class="agent-header compact-header">
+        <span class="result-label">Agent Review</span>
+        <h4>${escapeHtml(report.overall_status || classification.status || "지원 전략 요약")}</h4>
+        ${report.summary ? `<p>${escapeHtml(report.summary)}</p>` : ""}
       </div>
-
-      ${recommendations.length ? `
-        <div class="retrieval-recommendations">
-          <h5>Retrieval 기반 추천 후보</h5>
-          ${recommendations.map((item) => `
-            <article>
-              <strong>${item.title || "추천 후보"}</strong>
-              <p>${item.why_recommended || item.expected_cv_value || ""}</p>
-              <small>${item.source || item.type || ""}${item.deadline ? ` · ${item.deadline}` : ""}${item.status_note ? ` · ${item.status_note}` : ""}</small>
-              ${item.url ? `<a href="${item.url}" target="_blank" rel="noopener noreferrer">출처 확인</a>` : ""}
-            </article>
-          `).join("")}
-        </div>
-      ` : ""}
-    `)}
-
-    ${renderWorkflowStep(5, "Calendar & Todo", "확정된 우선순위를 일정과 실행 항목으로 옮겼습니다.", renderPlannerSection(planner), { current: true })}
+      <div class="feedback-status compact-status">
+        <article><span>검토 영역</span><strong>${activatedAgents.length || 0}</strong></article>
+        <article><span>보완 항목</span><strong>${priorityGaps.length || 0}</strong></article>
+        <article><span>추천 행동</span><strong>${nextActions.length || recommendations.length || 0}</strong></article>
+      </div>
+      ${renderSlideDeck("Agent 상세 리포트", slides)}
+      ${historyHtml}
+    </div>
   `;
 }
 
@@ -832,147 +888,117 @@ async function analyzeManualStream() {
   return finalData;
 }
 
-function renderAnalysis(data) {
-  const summary = data.summary;
-  const rankedJobs = data.rankedJobs || [];
-
-  resultCard.innerHTML = `
-    <span class="result-label">Retrieval Fit 리포트</span>
-    <h3>${summary.targetRole} 기준 추천 공고를 랭킹했습니다.</h3>
-    <div class="summary-grid">
-      <div><strong>${summary.extractedCharacters}</strong><span>추출 문자</span></div>
-      <div><strong>${summary.pdf?.method === "openai_input_file" ? "LLM" : summary.pdf?.pages || 0}</strong><span>정리 방식</span></div>
-      <div><strong>${rankedJobs.length}</strong><span>추천 공고</span></div>
-    </div>
-    <p class="extract-meta">정리 방식: ${summary.pdf?.method || "manual"}</p>
-    <section class="workflow-section" aria-label="분석 워크플로우">
-      <div class="workflow-section-header">
-        <div>
-          <span class="result-label">Analysis Workflow</span>
-          <h4>단계별 결과를 옆으로 넘겨 확인하세요.</h4>
-        </div>
-        <small>가로 스크롤</small>
-      </div>
-      <div class="workflow-steps">
-        ${renderWorkflowStep(1, "CV 초기 진단", "입력한 Metadata와 목표 직무를 기준으로 현재 증거를 정리했습니다.", `
-          ${renderLlmReport(data.llmReport)}
-          <div class="analysis-block">
-            <h4>강점</h4>
-            <ul>${summary.strengths.map((item) => `<li>${item}</li>`).join("")}</ul>
-          </div>
-          <div class="analysis-block">
-            <h4>보완할 증거</h4>
-            <ul>${summary.gaps.map((item) => `<li>${item}</li>`).join("")}</ul>
-          </div>
-        `)}
-        ${renderFeedbackLoop(data.feedbackLoop)}
-        ${renderWorkflowStep(6, "Retrieval Fit 결과", "추천 채용공고와 초기 AI 분석을 다시 확인할 수 있습니다.", `
-          ${renderAgent(data.agent)}
-          <div class="ranked-jobs">
-            <h4>추천 채용공고 ranking</h4>
-            ${rankedJobs
-              .map(
-                (job, index) => `
-                  <article class="ranked-job-card">
-                    <div class="job-card-top">
-                      <span class="fit high">#${index + 1} Fit ${job.fit}</span>
-                      <span class="deadline">${job.deadline}</span>
-                    </div>
-                    <span class="job-source">${job.source || "검색"}</span>
-                    <h4>${job.title}</h4>
-                    <p class="company">${job.company}</p>
-                    <p class="job-meta">${job.location}</p>
-                    <div class="skill-row">${job.skills.map((skill) => `<span>${skill}</span>`).join("")}</div>
-                    <ul class="fit-list">
-                      ${job.fitReasons.map((reason) => `<li>${reason}</li>`).join("")}
-                    </ul>
-                    <p class="gap-copy"><strong>보완:</strong> ${job.gaps[0]}</p>
-                    <a href="${job.url}" target="_blank" rel="noopener noreferrer">공고 보기</a>
-                  </article>
-                `,
-              )
-              .join("")}
-          </div>
-        `)}
-      </div>
-    </section>
-  `;
-  bindActionChecks();
-}
-
-function fillManualFields(fields) {
-  document.querySelector("#preferenceRole").value = fields.targetRole || pdfRoleInput.value.trim();
-  seedMetadataFromFields(fields);
-}
-
-async function extractPdfToForm() {
-  if (cvFile.files.length === 0) {
-    renderMessage("PDF 대기 중", "먼저 CV PDF를 업로드해주세요.", ["PDF를 선택하면 Agent가 Metadata 항목을 자동으로 채웁니다."]);
-    return;
-  }
-
-  const formData = new FormData();
-  formData.append("cv_file", cvFile.files[0]);
-  formData.append("target_role", pdfRoleInput.value.trim());
-  renderMessage("PDF 추출 중", "LLM이 PDF를 읽고 Metadata 항목으로 분류하고 있어요.", ["분류된 항목을 직접 수정한 다음 Agent 실행 버튼을 눌러주세요."]);
-  extractButton.disabled = true;
-
-  try {
-    const response = await fetch("/api/extract-cv", { method: "POST", body: formData });
-    const data = await readJsonResponse(response);
-    fillManualFields(data.fields || {});
-    setInputMode("manual");
-    renderMessage("정리 완료", "LLM이 PDF를 읽고 Metadata 항목을 채웠습니다.", [
-      "각 항목의 제목과 내용을 확인하고 필요한 부분을 수정한 뒤 Agent를 실행해주세요.",
-      `정리 방식: ${data.pdf?.method || "unknown"}`,
-    ]);
-  } catch (error) {
-    renderMessage("추출 실패", error.message, ["OPENAI_API_KEY가 설정되어 있는지 확인하거나 질문 입력으로 직접 작성해주세요."]);
-  } finally {
-    extractButton.disabled = false;
-  }
-}
-
-async function analyzeManual() {
-  const response = await fetch("/api/analyze-cv", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildAnalyzePayload()),
-  });
-  return readJsonResponse(response);
-}
-
 async function renderReport() {
-  const isPdfMode = pdfMode.classList.contains("active");
-  const isManualMode = manualMode.classList.contains("active");
-
-  if (!isPdfMode && !isManualMode) {
-    renderMessage("먼저 선택", "CV PDF가 있는지 먼저 알려주세요.", ["PDF가 있으면 업로드 화면을, 없으면 질문형 스펙 입력창을 열어드립니다."]);
+  const preferences = getPreferences();
+  if (!preferences.target_role) {
+    renderMessage("목표 직무 필요", "지원 목표를 먼저 입력해주세요.", ["예: AI Research Engineer, 데이터 분석 인턴, 프론트엔드 신입"]);
+    document.querySelector("#preferenceRole")?.focus();
     return;
   }
 
-  if (isPdfMode) {
-    renderMessage("먼저 PDF 정리", "PDF를 바로 분석하지 않고 LLM이 Metadata를 먼저 정리합니다.", ["`LLM으로 PDF 정리해서 입력칸 채우기` 버튼을 누른 뒤 Metadata와 preference를 수정해주세요."]);
+  const cvText = getManualText();
+  if (!cvText.trim()) {
+    renderMessage("이력서 내용 필요", "분석할 이력서 내용이 비어 있어요.", ["PDF를 업로드하거나 직접 입력으로 경험을 작성해주세요."]);
     return;
   }
 
-  if (isManualMode && !getManualText() && !getPreferences().additional_user_input) {
-    renderMessage("입력 필요", "Metadata 항목을 하나 이상 추가하거나 내용을 입력해주세요.", ["PDF가 없다면 Metadata의 '+ 항목 추가'로 직접 입력할 수 있습니다."]);
-    return;
-  }
-
-  renderStreamingShell();
   analyzeButton.disabled = true;
+  analyzeButton.textContent = "진단 중입니다...";
+  renderStreamingShell();
 
   try {
     const data = await analyzeManualStream();
     renderAnalysis(data);
   } catch (error) {
-    renderMessage("기본 결과로 전환", "실시간 Agent 대화를 끝까지 표시하지 못했습니다.", ["입력한 Metadata는 유지되어 있습니다. 잠시 후 Agent 실행을 다시 눌러주세요."]);
+    renderMessage("분석 실패", error.message || "분석 중 문제가 발생했습니다.", ["반드시 `http://localhost:4173/diagnosis.html`에서 열어주세요.", "서버 실행: `cd /root/hicareer && PORT=4173 python3 server.py`"]);
   } finally {
     analyzeButton.disabled = false;
+    analyzeButton.textContent = "내 이력서 진단하기";
   }
 }
+
+
+async function extractPdfToForm() {
+  const file = cvFile.files[0];
+  if (!file) {
+    renderMessage("PDF 대기 중", "이력서 PDF를 먼저 선택해주세요.", ["파일을 선택하면 자동으로 내용을 정리합니다."]);
+    return;
+  }
+
+  renderMessage("PDF 정리 중", "이력서 내용을 읽고 항목별로 정리하고 있어요.", ["잠시만 기다려주세요. 완료되면 아래 입력칸에 자동으로 채워집니다.", "정리된 내용은 분석 전에 직접 수정할 수 있습니다."]);
+
+  const formData = new FormData();
+  formData.append("cv_file", file);
+  formData.append("target_role", "");
+
+  try {
+    const response = await fetch("/api/extract-cv", { method: "POST", body: formData });
+    const data = await readJsonResponse(response);
+    if (data.fields) seedMetadataFromFields(data.fields);
+    if (data.metadata) {
+      metadataState = Object.fromEntries(Object.keys(metadataConfig).map((key) => [key, Array.isArray(data.metadata[key]) ? data.metadata[key] : []]));
+    }
+    setInputMode("manual");
+    renderMetadataEditor();
+    analyzeButton.classList.remove("hidden");
+    renderMessage("PDF 정리 완료", "이력서 내용을 입력칸에 채웠습니다.", ["빠진 경험이나 어색한 표현을 수정한 뒤 진단을 실행하세요."]);
+  } catch (error) {
+    renderMessage("PDF 정리 실패", error.message || "PDF 내용을 정리하지 못했습니다.", ["서버를 `python3 server.py`로 실행했는지 확인해주세요.", "OPENAI_API_KEY가 설정되어 있어야 PDF 정리가 가능합니다."]);
+  }
+}
+
+function renderAnalysis(data) {
+  const summary = data.summary || {};
+  const rankedJobs = data.rankedJobs || [];
+  const topJob = rankedJobs[0];
+  const jobSlides = rankedJobs.slice(0, 10).map((job, index) => `
+    <span class="slide-kicker">추천 공고 ${index + 1}</span>
+    <div class="job-slide-top">
+      <h5>${job.title}</h5>
+      <span class="fit high">Fit ${job.fit}</span>
+    </div>
+    <p class="company">${job.company || ""}</p>
+    <p class="job-meta">${job.location || ""}${job.deadline ? " · " + job.deadline : ""}</p>
+    <div class="skill-row">${(job.skills || []).slice(0, 6).map((skill) => `<span>${skill}</span>`).join("")}</div>
+    <div class="slide-two-col">
+      <div><strong>추천 이유</strong>${renderCompactList(job.fitReasons || [], 3)}</div>
+      <div><strong>보완 포인트</strong>${renderCompactList(job.gaps || [], 2)}</div>
+    </div>
+    ${job.url ? `<a class="slide-link" href="${job.url}" target="_blank" rel="noopener noreferrer">공고 보기</a>` : ""}
+  `);
+
+  resultCard.innerHTML = `
+    <div class="result-hero-summary">
+      <span class="result-label">진단 결과</span>
+      <h3>${summary.targetRole || "목표 직무"} 기준으로 지원 전략을 정리했습니다.</h3>
+      <p>${topJob ? `가장 적합한 후보는 ${topJob.title}이며, 총 ${rankedJobs.length}개 공고를 비교했습니다.` : "이력서 내용을 바탕으로 강점과 보완 방향을 정리했습니다."}</p>
+      <div class="summary-grid compact-summary">
+        <div><strong>${summary.extractedCharacters || 0}</strong><span>분석 문자</span></div>
+        <div><strong>${rankedJobs.length}</strong><span>비교 공고</span></div>
+        <div><strong>${topJob?.fit || "-"}</strong><span>최고 Fit</span></div>
+      </div>
+    </div>
+
+    <div class="quick-insights">
+      <article>
+        <span>강점</span>
+        <h4>앞에 배치할 내용</h4>
+        ${renderCompactList(summary.strengths || [], 3)}
+      </article>
+      <article>
+        <span>보완</span>
+        <h4>더 준비하면 좋은 내용</h4>
+        ${renderCompactList(summary.gaps || [], 3)}
+      </article>
+    </div>
+
+    ${renderFeedbackLoop(data.feedbackLoop)}
+    ${jobSlides.length ? renderSlideDeck("추천 채용공고", jobSlides) : ""}
+  `;
+  bindActionChecks();
+  bindSlideDecks();
+}
+
 
 hasPdfButton.addEventListener("click", () => setInputMode("pdf"));
 noPdfButton.addEventListener("click", () => setInputMode("manual"));
@@ -982,7 +1008,6 @@ cvFile.addEventListener("change", () => {
   fileName.textContent = cvFile.files[0]?.name || "이력서 또는 CV 파일을 올려주세요.";
   if (cvFile.files[0]) extractPdfToForm();
 });
-extractButton?.addEventListener("click", extractPdfToForm);
 analyzeButton.addEventListener("click", renderReport);
 document.querySelector("#metadataSections")?.addEventListener("click", (event) => {
   const addButton = event.target.closest(".add-metadata");
