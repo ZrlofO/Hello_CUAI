@@ -853,3 +853,14 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 }
+
+
+.job-source {
+  width: fit-content;
+  padding: 6px 9px;
+  border-radius: 999px;
+  color: var(--navy-800);
+  font-size: 12px;
+  font-weight: 900;
+  background: var(--blue-50);
+}

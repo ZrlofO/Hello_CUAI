@@ -119,6 +119,7 @@ function renderJobs(jobs, filter = "all") {
             <span class="fit high">Fit ${job.fit}</span>
             <span class="deadline">${job.deadline}</span>
           </div>
+          <span class="job-source">${job.source || "HICAREER"}</span>
           <h3>${job.title}</h3>
           <p class="company">${job.company}</p>
           <p class="job-meta">${job.location}</p>

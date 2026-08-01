@@ -1,6 +1,8 @@
+import html
 import json
 import mimetypes
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -15,6 +17,7 @@ PORT = int(os.getenv("PORT", "8080"))
 WORK24_AUTH_KEY = os.getenv("WORK24_AUTH_KEY", "")
 WORK24_ENDPOINT = "https://www.work24.go.kr/cm/openApi/call/wk/callOpenApiSvcInfo210L01.do"
 CACHE_TTL_SECONDS = int(os.getenv("JOBS_CACHE_TTL_SECONDS", "600"))
+DEFAULT_JOB_KEYWORD = os.getenv("JOB_SEARCH_KEYWORD", "신입 개발 데이터 AI")
 
 _cache = {"saved_at": 0, "jobs": None}
 
@@ -133,6 +136,114 @@ def normalize_deadline(close_date):
     return close_date
 
 
+def clean_text(value):
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = html.unescape(value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip(" -|\n\t")
+
+
+def absolute_url(base_url, href):
+    return urllib.parse.urljoin(base_url, html.unescape(href))
+
+
+def read_url(url):
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 HICAREER/1.0",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.7",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=6) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
+def build_web_job(title, company, url, source, rank):
+    category = infer_category(f"{title} {company}")
+    return {
+        "title": title or "채용 공고",
+        "company": company or source,
+        "category": category,
+        "location": "검색 결과 확인",
+        "deadline": "상세 확인",
+        "fit": max(72, 92 - rank * 3),
+        "skills": infer_skills(title),
+        "reason": f"{source}에서 검색된 현재 채용 후보입니다. 목표 직무와 CV 증거를 비교해보세요.",
+        "url": url,
+        "source": source,
+    }
+
+
+def extract_company_near(html_text, start, end):
+    before = html_text[max(0, start - 900):start]
+    after = html_text[end:min(len(html_text), end + 900)]
+    candidates = []
+    for pattern in [
+        r'class="[^"]*(?:company|corp|name)[^"]*"[^>]*>(.*?)</',
+        r'<a[^>]+href="[^"]*(?:company|corp)[^"]*"[^>]*>(.*?)</a>',
+        r'<span[^>]*>([^<>]{2,40}(?:주식회사|\(주\)|㈜|유한회사|그룹|테크|랩스|코리아)[^<>]*)</span>',
+    ]:
+        candidates.extend(clean_text(match) for match in re.findall(pattern, before + after, re.I | re.S))
+    return next((candidate for candidate in candidates if candidate and len(candidate) <= 45), "")
+
+
+def scrape_saramin_jobs(keyword, limit):
+    query = urllib.parse.urlencode({"searchType": "search", "searchword": keyword})
+    base_url = "https://www.saramin.co.kr"
+    url = f"{base_url}/zf_user/search/recruit?{query}"
+    html_text = read_url(url)
+    jobs = []
+    seen = set()
+
+    for match in re.finditer(r'<a[^>]+href="([^"]*(?:/zf_user/jobs/relay/view|/zf_user/jobs/relay/pop-view)[^"]*)"[^>]*>(.*?)</a>', html_text, re.I | re.S):
+        href, raw_title = match.groups()
+        title = clean_text(raw_title)
+        if len(title) < 4 or title in seen or "스크랩" in title:
+            continue
+        seen.add(title)
+        jobs.append(build_web_job(title, extract_company_near(html_text, *match.span()), absolute_url(base_url, href), "사람인", len(jobs)))
+        if len(jobs) >= limit:
+            break
+    return jobs
+
+
+def scrape_jobkorea_jobs(keyword, limit):
+    query = urllib.parse.urlencode({"stext": keyword})
+    base_url = "https://www.jobkorea.co.kr"
+    url = f"{base_url}/Search/?{query}"
+    html_text = read_url(url)
+    jobs = []
+    seen = set()
+
+    for match in re.finditer(r'<a[^>]+href="([^"]*(?:/Recruit/GI_Read|/Recruit/Co_Read|/List_GI/)[^"]*)"[^>]*>(.*?)</a>', html_text, re.I | re.S):
+        href, raw_title = match.groups()
+        title = clean_text(raw_title)
+        if len(title) < 4 or title in seen or "즉시지원" in title:
+            continue
+        seen.add(title)
+        jobs.append(build_web_job(title, extract_company_near(html_text, *match.span()), absolute_url(base_url, href), "잡코리아", len(jobs)))
+        if len(jobs) >= limit:
+            break
+    return jobs
+
+
+def merge_jobs(*job_groups, limit):
+    merged = []
+    seen = set()
+    for group in job_groups:
+        for job in group:
+            key = f"{job.get('title')}|{job.get('company')}"
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(job)
+            if len(merged) >= limit:
+                return merged
+    return merged
+
+
 def normalize_work24_item(item):
     title = text_of(item, "title", "wantedTitle", "recrutPbancTtl") or "채용 공고"
     company = text_of(item, "company", "corpNm", "instNm", "empBusiNm") or "기업명 미공개"
@@ -161,12 +272,26 @@ def parse_work24_xml(xml_text, limit):
     return jobs
 
 
+def fetch_popular_jobs(limit, keyword=DEFAULT_JOB_KEYWORD):
+    if _cache["jobs"] and time.time() - _cache["saved_at"] < CACHE_TTL_SECONDS:
+        return _cache["jobs"][:limit]
+
+    web_jobs = merge_jobs(
+        scrape_saramin_jobs(keyword, limit),
+        scrape_jobkorea_jobs(keyword, limit),
+        limit=limit,
+    )
+    if web_jobs:
+        _cache["saved_at"] = time.time()
+        _cache["jobs"] = web_jobs
+        return web_jobs[:limit]
+
+    return fetch_work24_jobs(limit)
+
+
 def fetch_work24_jobs(limit):
     if not WORK24_AUTH_KEY:
         return FALLBACK_JOBS[:limit]
-
-    if _cache["jobs"] and time.time() - _cache["saved_at"] < CACHE_TTL_SECONDS:
-        return _cache["jobs"][:limit]
 
     params = urllib.parse.urlencode(
         {
@@ -205,9 +330,10 @@ class HICareerHandler(SimpleHTTPRequestHandler):
     def handle_popular_jobs(self, parsed_url):
         query = urllib.parse.parse_qs(parsed_url.query)
         limit = int(query.get("limit", ["6"])[0])
+        keyword = query.get("keyword", [DEFAULT_JOB_KEYWORD])[0]
 
         try:
-            jobs = fetch_work24_jobs(limit)
+            jobs = fetch_popular_jobs(limit, keyword)
             self.send_json(jobs)
         except (urllib.error.URLError, TimeoutError, ElementTree.ParseError, ValueError):
             self.send_json(FALLBACK_JOBS[:limit])

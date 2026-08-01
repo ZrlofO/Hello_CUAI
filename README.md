@@ -24,9 +24,9 @@ python3 server.py
 
 ## 채용 공고 연동 방향
 
-홈의 인기 채용 공고 섹션은 먼저 `/api/jobs/popular?limit=6`를 호출하고, 백엔드가 없거나 인증키가 없으면 샘플 데이터로 표시됩니다.
-`server.py`는 Work24 채용정보 API를 서버에서 호출하므로 API 키가 프론트엔드에 노출되지 않습니다.
-실서비스에서는 워크넷/Work24, 사람인, 잡코리아, 공공데이터 API를 서버 라우트에서 통합하는 구조를 권장합니다.
+홈의 인기 채용 공고 섹션은 먼저 `/api/jobs/popular?limit=6`를 호출하고, 백엔드가 없거나 외부 사이트 요청이 실패하면 샘플 데이터로 표시됩니다.
+`server.py`는 기능 검증을 위해 사람인/잡코리아 검색 페이지를 서버에서 읽어오고, 실패 시 Work24 API 또는 샘플 데이터로 fallback합니다.
+실서비스에서는 각 서비스의 공식 API/제휴 방식과 이용약관을 확인한 뒤 서버 라우트에서 통합하는 구조를 권장합니다.
 
 권장 호출 전략:
 
@@ -45,4 +45,16 @@ python3 server.py
 
 ```bash
 WORK24_AUTH_KEY=발급받은_키 python3 server.py
+```
+
+### 사람인/잡코리아 기능 검증 모드
+
+`server.py`는 기본적으로 사람인과 잡코리아 검색 결과를 먼저 시도합니다.
+사이트 HTML 구조 변경, 차단, 네트워크 실패가 발생하면 Work24 또는 샘플 데이터로 자동 대체됩니다.
+
+예시:
+
+```bash
+python3 server.py
+# http://localhost:8080/api/jobs/popular?limit=6&keyword=AI%20인턴
 ```
