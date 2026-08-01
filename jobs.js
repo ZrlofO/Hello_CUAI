@@ -123,7 +123,7 @@ function renderJobs(jobs, filter = "all") {
           <p class="company">${job.company}</p>
           <p class="job-meta">${job.location}</p>
           <div class="skill-row">${job.skills.map((skill) => `<span>${skill}</span>`).join("")}</div>
-          <p class="job-reason">${job.reason}</p>
+          ${job.reason ? `<p class="job-reason">${job.reason}</p>` : ""}
           <a href="${job.url}" target="_blank" rel="noopener noreferrer">공고 보기</a>
         </article>
       `,

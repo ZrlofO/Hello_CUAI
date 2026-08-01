@@ -160,17 +160,64 @@ def read_url(url):
         return response.read().decode("utf-8", errors="replace")
 
 
-def build_web_job(title, company, url, source, rank):
-    category = infer_category(f"{title} {company}")
+def extract_deadline(text_block):
+    patterns = [
+        r'D-\s*\d+',
+        r'~\s*\d{1,2}\.\d{1,2}\([^)]*\)',
+        r'~\s*\d{1,2}\.\d{1,2}',
+        r'오늘마감|내일마감|상시채용|채용시',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text_block)
+        if match:
+            return clean_text(match.group(0))
+    return "상세 확인"
+
+
+def extract_location(text_block):
+    regions = [
+        "서울", "경기", "인천", "부산", "대구", "대전", "광주", "울산", "세종",
+        "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주", "원격",
+    ]
+    match = re.search(r'(' + '|'.join(regions) + r')[가-힣\w\s·,-]{0,24}', text_block)
+    if match:
+        return clean_text(match.group(0))
+    return "지역 확인"
+
+
+def extract_summary(text_block, title, company):
+    cleaned = clean_text(text_block)
+    cleaned = cleaned.replace(title, " ").replace(company, " ")
+    parts = [part.strip() for part in re.split(r'\s{2,}|\||•|·', cleaned) if part.strip()]
+    blocked = ["스크랩", "관심기업", "입사지원", "홈페이지 지원", "즉시지원", "공고 보기"]
+    useful = []
+    for part in parts:
+        if any(word in part for word in blocked):
+            continue
+        if re.fullmatch(r'D-\s*\d+|~?\d{1,2}\.\d{1,2}.*|\d+분 전.*|\d+일 전.*', part):
+            continue
+        if 4 <= len(part) <= 90:
+            useful.append(part)
+    return " · ".join(useful[:2])
+
+
+def extract_context(html_text, start, end):
+    return html_text[max(0, start - 900):min(len(html_text), end + 1200)]
+
+
+def build_web_job(title, company, url, source, rank, context=""):
+    category = infer_category(f"{title} {company} {context}")
+    context_text = clean_text(context)
+    summary = extract_summary(context, title, company)
     return {
         "title": title or "채용 공고",
         "company": company or source,
         "category": category,
-        "location": "검색 결과 확인",
-        "deadline": "상세 확인",
+        "location": extract_location(context_text),
+        "deadline": extract_deadline(context_text),
         "fit": max(72, 92 - rank * 3),
-        "skills": infer_skills(title),
-        "reason": f"{source}에서 검색된 현재 채용 후보입니다. 목표 직무와 CV 증거를 비교해보세요.",
+        "skills": infer_skills(f"{title} {summary}"),
+        "reason": summary,
         "url": url,
         "source": source,
     }
@@ -189,6 +236,17 @@ def extract_company_near(html_text, start, end):
     return next((candidate for candidate in candidates if candidate and len(candidate) <= 45), "")
 
 
+def first_match(pattern, text_block):
+    match = re.search(pattern, text_block, re.I | re.S)
+    if not match:
+        return ""
+    return clean_text(match.group(1))
+
+
+def all_matches(pattern, text_block):
+    return [clean_text(match) for match in re.findall(pattern, text_block, re.I | re.S) if clean_text(match)]
+
+
 def scrape_saramin_jobs(keyword, limit):
     query = urllib.parse.urlencode({"searchType": "search", "searchword": keyword})
     base_url = "https://www.saramin.co.kr"
@@ -196,14 +254,41 @@ def scrape_saramin_jobs(keyword, limit):
     html_text = read_url(url)
     jobs = []
     seen = set()
+    blocks = re.findall(r'<div class="item_recruit"[\s\S]*?(?=<div class="item_recruit"|<div class="common_recruilt_list|$)', html_text)
 
-    for match in re.finditer(r'<a[^>]+href="([^"]*(?:/zf_user/jobs/relay/view|/zf_user/jobs/relay/pop-view)[^"]*)"[^>]*>(.*?)</a>', html_text, re.I | re.S):
-        href, raw_title = match.groups()
-        title = clean_text(raw_title)
+    for block in blocks:
+        link_match = re.search(r'<a[^>]+href="([^"]*(?:/zf_user/jobs/relay/view|/zf_user/jobs/relay/pop-view)[^"]*)"[^>]*(?:title="([^"]+)")?[^>]*>(.*?)</a>', block, re.I | re.S)
+        if not link_match:
+            continue
+
+        href, title_attr, raw_title = link_match.groups()
+        title = clean_text(title_attr or raw_title)
         if len(title) < 4 or title in seen or "스크랩" in title:
             continue
+
+        company = first_match(r'<strong class="corp_name">[\s\S]*?<a[^>]*>(.*?)</a>', block) or extract_company_near(block, 0, len(block))
+        deadline = first_match(r'<span class="date">(.*?)</span>', block) or extract_deadline(clean_text(block))
+        condition_match = re.search(r'<div class="job_condition">([\s\S]*?)</div>', block, re.I | re.S)
+        condition_block = condition_match.group(1) if condition_match else ""
+        condition_spans = all_matches(r'<span>([\s\S]*?)</span>', condition_block)
+        sectors = all_matches(r'<div class="job_sector">([\s\S]*?)</div>', block)
+        condition_text = " ".join(condition_spans) or clean_text(condition_block)
+        sector_text = clean_text(" ".join(sectors))
+        location = condition_spans[0] if condition_spans else extract_location(condition_text)
+        summary_parts = []
+        if condition_text:
+            summary_parts.append(condition_text)
+        if sector_text:
+            summary_parts.append(sector_text.replace("등록일", " 등록일"))
+        summary = " · ".join(part for part in summary_parts if part)[:140]
+
         seen.add(title)
-        jobs.append(build_web_job(title, extract_company_near(html_text, *match.span()), absolute_url(base_url, href), "사람인", len(jobs)))
+        job = build_web_job(title, company, absolute_url(base_url, href), "사람인", len(jobs), block)
+        job["deadline"] = deadline
+        job["location"] = location
+        job["reason"] = summary
+        job["skills"] = infer_skills(f"{title} {sector_text}")
+        jobs.append(job)
         if len(jobs) >= limit:
             break
     return jobs
@@ -223,7 +308,9 @@ def scrape_jobkorea_jobs(keyword, limit):
         if len(title) < 4 or title in seen or "즉시지원" in title:
             continue
         seen.add(title)
-        jobs.append(build_web_job(title, extract_company_near(html_text, *match.span()), absolute_url(base_url, href), "잡코리아", len(jobs)))
+        context = extract_context(html_text, *match.span())
+        company = extract_company_near(html_text, *match.span())
+        jobs.append(build_web_job(title, company, absolute_url(base_url, href), "잡코리아", len(jobs), context))
         if len(jobs) >= limit:
             break
     return jobs
