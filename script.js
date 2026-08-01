@@ -1,6 +1,20 @@
-const cvInput = document.querySelector("#cvInput");
+const pdfTab = document.querySelector("#pdfTab");
+const manualTab = document.querySelector("#manualTab");
+const pdfMode = document.querySelector("#pdfMode");
+const manualMode = document.querySelector("#manualMode");
+const switchToManual = document.querySelector("#switchToManual");
+const cvFile = document.querySelector("#cvFile");
+const fileName = document.querySelector("#fileName");
 const analyzeButton = document.querySelector("#analyzeButton");
 const resultCard = document.querySelector("#resultCard");
+const manualInputs = [
+  document.querySelector("#roleInput"),
+  document.querySelector("#educationInput"),
+  document.querySelector("#projectInput"),
+  document.querySelector("#workInput"),
+  document.querySelector("#activityInput"),
+  document.querySelector("#strengthInput"),
+];
 
 const keywordGroups = {
   tech: ["react", "python", "ai", "데이터", "개발", "분석", "프로젝트", "머신러닝"],
@@ -57,15 +71,46 @@ function buildReport(text) {
   };
 }
 
+function setMode(mode) {
+  const isPdfMode = mode === "pdf";
+
+  pdfTab.classList.toggle("active", isPdfMode);
+  manualTab.classList.toggle("active", !isPdfMode);
+  pdfMode.classList.toggle("active", isPdfMode);
+  manualMode.classList.toggle("active", !isPdfMode);
+}
+
+function getManualText() {
+  return manualInputs
+    .map((input) => input.value.trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
 function renderReport() {
-  const text = cvInput.value.trim();
+  const isPdfMode = pdfMode.classList.contains("active");
+  const hasPdf = cvFile.files.length > 0;
+
+  if (isPdfMode && !hasPdf) {
+    setMode("manual");
+    resultCard.innerHTML = `
+      <span class="result-label">질문 입력으로 전환</span>
+      <h3>PDF가 없다면 스펙 질문에 답하면서 진단을 시작할 수 있어요.</h3>
+      <ul>
+        <li>희망 직무, 프로젝트, 인턴, 대외활동, 강점을 가능한 만큼 채워주세요.</li>
+      </ul>
+    `;
+    return;
+  }
+
+  const text = isPdfMode ? `${cvFile.files[0].name} PDF 이력서 업로드 프로젝트 인턴 활동 분석` : getManualText();
 
   if (!text) {
     resultCard.innerHTML = `
       <span class="result-label">입력 필요</span>
-      <h3>CV 요약을 넣으면 HICAREER가 방향을 잡아드려요.</h3>
+      <h3>스펙 질문 입력칸을 하나 이상 채워주세요.</h3>
       <ul>
-        <li>전공, 프로젝트, 인턴, 대외활동, 봉사활동, 수상 경험을 자유롭게 적어주세요.</li>
+        <li>희망 직무, 프로젝트, 인턴, 대외활동, 강점을 질문별로 적어주세요.</li>
       </ul>
     `;
     return;
@@ -88,4 +133,10 @@ function renderReport() {
   `;
 }
 
+pdfTab.addEventListener("click", () => setMode("pdf"));
+manualTab.addEventListener("click", () => setMode("manual"));
+switchToManual.addEventListener("click", () => setMode("manual"));
+cvFile.addEventListener("change", () => {
+  fileName.textContent = cvFile.files[0]?.name || "이력서 또는 CV 파일을 올려주세요.";
+});
 analyzeButton.addEventListener("click", renderReport);

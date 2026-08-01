@@ -112,11 +112,53 @@
           </p>
         </div>
         <div class="diagnosis-panel">
-          <label for="cvInput">CV 또는 자기소개 요약</label>
-          <textarea
-            id="cvInput"
-            placeholder="예: 컴퓨터공학 전공, React 프로젝트 2개, 데이터 분석 인턴, 교내 동아리 운영..."
-          ></textarea>
+          <div class="input-tabs" role="tablist" aria-label="CV 입력 방식">
+            <button class="tab-button active" id="pdfTab" type="button">PDF 업로드</button>
+            <button class="tab-button" id="manualTab" type="button">질문으로 입력</button>
+          </div>
+
+          <div class="input-mode active" id="pdfMode">
+            <label for="cvFile">CV PDF 업로드</label>
+            <label class="upload-box" for="cvFile">
+              <input id="cvFile" type="file" accept="application/pdf,.pdf" />
+              <span class="upload-icon">PDF</span>
+              <strong id="fileName">이력서 또는 CV 파일을 올려주세요.</strong>
+              <small>PDF가 있으면 가장 빠르게 진단을 시작할 수 있어요.</small>
+            </label>
+            <p class="mode-hint">
+              아직 PDF가 없다면 <button id="switchToManual" type="button">질문으로 입력하기</button>를 선택하세요.
+            </p>
+          </div>
+
+          <div class="input-mode" id="manualMode">
+            <div class="question-grid">
+              <label>
+                희망 직무
+                <input id="roleInput" type="text" placeholder="예: 프론트엔드 개발자, 데이터 분석가" />
+              </label>
+              <label>
+                전공/교육
+                <input id="educationInput" type="text" placeholder="예: 컴퓨터공학, UX 부트캠프 수료" />
+              </label>
+              <label>
+                프로젝트 경험
+                <textarea id="projectInput" placeholder="프로젝트명, 사용 기술, 성과를 적어주세요."></textarea>
+              </label>
+              <label>
+                인턴/실무 경험
+                <textarea id="workInput" placeholder="회사, 역할, 기여도, 배운 점을 적어주세요."></textarea>
+              </label>
+              <label>
+                봉사활동·대외활동
+                <textarea id="activityInput" placeholder="동아리, 서포터즈, 봉사, 공모전, 수상 경험을 적어주세요."></textarea>
+              </label>
+              <label>
+                자신 있는 강점
+                <textarea id="strengthInput" placeholder="예: 빠른 학습, 데이터 기반 사고, 커뮤니케이션"></textarea>
+              </label>
+            </div>
+          </div>
+
           <button class="button primary full" id="analyzeButton" type="button">AI 진단 보기</button>
           <div class="result-card" id="resultCard">
             <span class="result-label">샘플 리포트</span>
