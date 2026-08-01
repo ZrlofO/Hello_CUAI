@@ -576,12 +576,11 @@ function renderPlannerSection(planner = {}) {
     <div class="planner-section">
       <div class="agent-header">
         <span class="result-label">실행 계획</span>
-        <h5>Calendar Draft & Todo</h5>
+        <h5>Preparation Todo</h5>
         ${planner.planner_summary ? `<p>${escapeHtml(planner.planner_summary)}</p>` : ""}
       </div>
 
       <div class="planner-grid planner-stack">
-        ${renderCalendarDraft(calendar)}
         ${renderTodoDraft(todos)}
       </div>
 
@@ -702,7 +701,7 @@ function renderFeedbackLoop(loop) {
     planner && Object.keys(planner).length ? `
       <span class="slide-kicker">Calendar & Todo</span>
       <h5>실행 계획 초안</h5>
-      ${renderPlannerSection(planner)}
+
     ` : "",
   ];
 
@@ -1008,7 +1007,7 @@ async function extractPdfToForm() {
 
 function renderAnalysis(data) {
   const summary = data.summary || {};
-  const rankedJobs = data.rankedJobs || [];
+  const rankedJobs = data.feedbackLoop?.recommendedJobs || data.rankedJobs || [];
   const topJob = rankedJobs[0];
   const llmReport = data.llmReport || {};
   const quickStrengths = getQuickStrengths(data);
@@ -1017,7 +1016,7 @@ function renderAnalysis(data) {
   const activatedCount = data.feedbackLoop?.activatedAgents?.length || 0;
   const jobSlides = rankedJobs.slice(0, 10).map((job, index) => {
     const note = getJobNoteFor(job, llmReport);
-    const reasonItems = note?.fitReason ? [note.fitReason] : (job.fitReasons || []);
+    const reasonItems = note?.fitReason ? [note.fitReason] : (job.recommendationReason ? [job.recommendationReason] : (job.fitReasons || []));
     const riskItems = note?.risk ? [note.risk] : (job.gaps || []);
     return `
       <span class="slide-kicker">추천 공고 ${index + 1}</span>

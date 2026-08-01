@@ -1245,7 +1245,7 @@ def build_agent_trace(cv_text, target_role, jobs, ranked_jobs, common_requiremen
 def build_agent_result(cv_text, target_role, jobs, ranked_jobs):
     cv_phrases = extract_keyphrases(cv_text, top_n=18)
     evidence = evidence_signals(cv_text)
-    requirements = common_job_requirements(ranked_jobs)
+    requirements = common_job_requirements(ranked_jobs) or extract_profile_skills(cv_text)[:8]
     matched, gaps = detect_evidence_gaps(cv_phrases, requirements, evidence)
     opportunities = recommend_opportunities(gaps, target_role)
     weekly_plan = build_weekly_plan(opportunities, gaps)
@@ -1480,6 +1480,7 @@ SUPPORTING_COMMON_PROMPT = load_agent_prompt("supporting_common.md")
 RETRIEVAL_ONLY_PROMPT = load_agent_prompt("retrieval_only.md")
 JSON_REPAIR_PROMPT = load_agent_prompt("json_repair.md")
 PLANNER_AGENT_PROMPT = load_agent_prompt("planner_agent.md")
+CV_QUALITY_CRITERIA_PROMPT = load_agent_prompt("cv_quality_criteria.md")
 
 
 def repair_openai_json(raw_text, expected_schema, context_label="agent output", model=None):
@@ -1562,45 +1563,13 @@ def job_context_for_feedback(ranked_jobs):
 
 
 def build_retrieval_context(ranked_jobs, target_role):
-    retrieved_at = time.strftime("%Y-%m-%d")
-    benchmark_sources = []
-    for job in ranked_jobs[:10]:
-        benchmark_sources.append(
-            {
-                "source_type": "job_posting",
-                "title": job.get("title", ""),
-                "organization": job.get("company", ""),
-                "role": target_role or job.get("title", ""),
-                "url": job.get("url", ""),
-                "retrieved_at": retrieved_at,
-                "main_tasks": job.get("fitReasons", []),
-                "required_qualifications": job.get("fitReasons", []),
-                "preferred_qualifications": [],
-                "required_skills": job.get("skills", []),
-                "preferred_skills": [],
-                "education_or_experience_requirement": "",
-                "deadline": job.get("deadline", ""),
-                "notes": job.get("source", ""),
-            }
-        )
-    success_cases = collect_consulting_success_cases(target_role)
-    debug_path = write_debug_json(
-        "consulting_success_cases.json",
-        {
-            "target_role": target_role,
-            "retrieved_at": retrieved_at,
-            "count": len(success_cases),
-            "cases": success_cases,
-        },
-    )
     return {
-        "benchmark_sources": benchmark_sources,
-        "success_case_sources": success_cases,
-        "recommendation_sources": success_cases,
+        "benchmark_sources": [],
+        "success_case_sources": [],
+        "recommendation_sources": [],
         "source_registry": load_retrieval_source_registry().get("source_registry", []),
-        "debug_success_cases_path": debug_path,
-        "retrieval_policy": "consulting_source_registry_quality_gate",
-        "retrieved_at": retrieved_at,
+        "retrieval_policy": "cv_quality_prompt_only_before_support",
+        "retrieved_at": time.strftime("%Y-%m-%d"),
     }
 
 
@@ -1862,6 +1831,8 @@ def call_supporting_agent(agent_key, metadata, preferences, benchmark, cv_text, 
         SUPPORTING_COMMON_PROMPT
         + "\n\n"
         + RETRIEVAL_ONLY_PROMPT
+        + "\n\n"
+        + CV_QUALITY_CRITERIA_PROMPT
         + "\n\n"
         + agent_prompt
     )
@@ -2816,8 +2787,9 @@ def build_direct_agent_plan(metadata, preferences, ranked_jobs, retrieval_contex
         requirements = extract_profile_skills(metadata_to_text(metadata))[:8] or ["직무 관련 경험", "본인 역할", "산출물", "정량 성과"]
     benchmark = {
         "target_role": target_role,
-        "source_count": len(retrieval_context.get("benchmark_sources", [])),
-        "benchmark_sources": retrieval_context.get("benchmark_sources", [])[:10],
+        "source_count": 0,
+        "benchmark_sources": [],
+        "quality_criteria": CV_QUALITY_CRITERIA_PROMPT,
         "core_requirements": requirements[:8],
         "preferred_requirements": requirements[8:14],
         "minimum_viable_profile": [
@@ -3019,7 +2991,7 @@ def aggregate_supporting_reviews_for_leading(preferences, plan, supporting_revie
 
 
 def call_leading_agent_direct_final(metadata, preferences, ranked_jobs, retrieval_context, plan, supporting_reviews, aggregate_result, planner_result=None):
-    system_prompt = (
+    system_prompt = CV_QUALITY_CRITERIA_PROMPT + "\n\n" + (
         "너는 HICAREER의 Leading Agent입니다. Supporting Agent 검토를 직접 통합해 최종 판단을 내립니다. "
         "지원자 metadata 원문, 목표 직무, 상위 채용공고 benchmark, Supporting Agent 3개의 검토를 종합해 사용자에게 보여줄 리포트를 작성하세요. "
         "일반론을 피하고, 확인된 metadata와 retrieved source 안에서만 말하세요. "
@@ -3083,6 +3055,61 @@ def fallback_leading_agent_direct_final(preferences, aggregate_result, planner_r
         },
         "conversation_log": [{"from": "Leading Agent", "to": "User", "message": "Supporting Agent 결과를 사용자용 리포트로 정리했습니다."}],
     }
+
+
+def recommend_jobs_after_support(metadata, preferences, ranked_jobs, support_result):
+    """Rank the already retrieved job candidates only after Support review is complete."""
+    candidates = [job for job in (ranked_jobs or []) if job.get("url")][:20]
+    if not candidates:
+        return []
+    candidate_payload = job_context_for_feedback(candidates)
+    user_prompt = {
+        "task": "Support Agent 검토 결과를 기준으로 현재 후보 공고 중 가장 적합한 채용공고 10개를 추천하세요.",
+        "rules": [
+            "Support Agent가 발견한 weakness와 보완 방향을 추천 근거로 우선 반영하세요.",
+            "공고에 없는 조건이나 회사 정보를 추론하지 마세요.",
+            "후보 목록에 있는 URL만 사용하세요.",
+            "가능하면 10개를 반환하되 후보가 부족하면 있는 만큼만 반환하세요.",
+        ],
+        "metadata": metadata,
+        "preferences": preferences,
+        "support_result": support_result,
+        "job_candidates": candidate_payload,
+        "output_schema": {
+            "recommendations": [
+                {
+                    "url": "string",
+                    "reason": "string",
+                    "fit_priority": "high | medium | low",
+                }
+            ]
+        },
+    }
+    try:
+        result = call_openai_json(
+            "You are a recruiting recommendation agent. Return JSON only.",
+            user_prompt,
+            max_output_tokens=1800,
+            timeout=25,
+        )
+        by_url = {job.get("url"): job for job in candidates}
+        by_title = {normalize_text(job.get("title")): job for job in candidates}
+        selected = []
+        for item in result.get("recommendations", []) if isinstance(result, dict) else []:
+            if not isinstance(item, dict):
+                continue
+            job = by_url.get(item.get("url")) or by_title.get(normalize_text(item.get("title")))
+            if not job or job.get("url") in {row.get("url") for row in selected}:
+                continue
+            enriched = dict(job)
+            enriched["recommendationReason"] = item.get("reason", "")
+            enriched["recommendationPriority"] = item.get("fit_priority", "medium")
+            selected.append(enriched)
+        if selected:
+            return selected[:10]
+    except Exception:
+        pass
+    return candidates[:10]
 
 
 def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
@@ -3211,21 +3238,28 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
         emit_event("conversation", message)
     emit_event("consult_result", aggregate_result)
 
-    planner_input = build_planner_input(metadata, preferences, aggregate_result, retrieval_context, supporting_search_results)
-    planner_result = normalize_planner_result(fallback_planner_result(planner_input))
-    emit_event("planner_result", planner_result)
+    emit_event("status", {"message": "Support Agent 결과를 기준으로 채용공고 추천을 시작합니다."})
+    recommended_jobs = recommend_jobs_after_support(metadata, preferences, ranked_jobs, aggregate_result)
+    aggregate_result["recommended_jobs"] = recommended_jobs
+    aggregate_result["source_links"] = [
+        {"title": job.get("title", "채용공고"), "url": job.get("url", ""), "used_for": "Support 결과 기반 추천"}
+        for job in recommended_jobs[:10]
+        if job.get("url")
+    ] + aggregate_result.get("source_links", [])
+    emit_event("job_recommendations", {"jobs": recommended_jobs[:10]})
+    planner_result = {}
 
     emit_event("status", {"message": "Leading Agent가 최종 리포트를 작성하고 있습니다."})
     try:
         leading_final = call_leading_agent_direct_final(
             metadata,
             preferences,
-            ranked_jobs,
+            recommended_jobs,
             retrieval_context,
             plan,
             supporting_reviews,
             aggregate_result,
-            planner_result,
+            {},
         )
     except Exception:
         leading_final = fallback_leading_agent_direct_final(preferences, aggregate_result, planner_result)
@@ -3247,11 +3281,7 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
         "laneConversations": lane_conversations,
         "firstConsultReview": {},
         "consultResult": aggregate_result,
-        "plannerInput": {
-            "user_constraints": planner_input.get("user_constraints", {}),
-            "verified_source_count": len(planner_input.get("verified_sources", [])),
-            "planning_policy": planner_input.get("planning_policy", {}),
-        },
+        "recommendedJobs": recommended_jobs[:10],
         "plannerResult": planner_result,
         "leadingReport": leading_final.get("final_report", {}),
         "conversationLog": conversation_log,
@@ -3776,8 +3806,9 @@ class HICareerHandler(SimpleHTTPRequestHandler):
             ranked_jobs = rank_jobs_for_cv(cv_text, jobs, target_role)
             agent = build_agent_result(cv_text, target_role, jobs, ranked_jobs)
             summary = build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta}
-            llm_report = safe_llm_report(cv_text, summary, ranked_jobs, agent)
             feedback_loop = safe_feedback_loop(cv_text, metadata, preferences, ranked_jobs)
+            report_jobs = feedback_loop.get("recommendedJobs", []) if isinstance(feedback_loop, dict) else []
+            llm_report = safe_llm_report(cv_text, summary, report_jobs, agent)
             self.send_json(
                 {
                     "source": "pdf" if filename else "manual",
@@ -3795,8 +3826,9 @@ class HICareerHandler(SimpleHTTPRequestHandler):
             ranked_jobs = rank_jobs_for_cv(cv_text, FALLBACK_JOBS, target_role)
             agent = build_agent_result(cv_text, target_role, FALLBACK_JOBS, ranked_jobs)
             summary = build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta}
-            llm_report = safe_llm_report(cv_text, summary, ranked_jobs, agent)
             feedback_loop = safe_feedback_loop(cv_text, metadata, preferences, ranked_jobs)
+            report_jobs = feedback_loop.get("recommendedJobs", []) if isinstance(feedback_loop, dict) else []
+            llm_report = safe_llm_report(cv_text, summary, report_jobs, agent)
             self.send_json(
                 {
                     "source": "fallback",
@@ -3845,8 +3877,6 @@ class HICareerHandler(SimpleHTTPRequestHandler):
             ranked_jobs = rank_jobs_for_cv(cv_text, jobs, target_role)
             agent = build_agent_result(cv_text, target_role, jobs, ranked_jobs)
             summary = build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta}
-            llm_report = safe_llm_report(cv_text, summary, ranked_jobs, agent)
-
             try:
                 feedback_loop = build_feedback_loop(
                     cv_text,
@@ -3871,6 +3901,8 @@ class HICareerHandler(SimpleHTTPRequestHandler):
                     "leadingReport": fallback_leading_agent_final(preferences, fallback_consult).get("final_report", {}),
                     "conversationLog": fallback_plan.get("conversation_log", []) + fallback_consult.get("conversation_log", []),
                 }
+            report_jobs = feedback_loop.get("recommendedJobs", []) if isinstance(feedback_loop, dict) else []
+            llm_report = safe_llm_report(cv_text, summary, report_jobs, agent)
             self.write_stream_event(
                 "final",
                 {
@@ -3888,8 +3920,9 @@ class HICareerHandler(SimpleHTTPRequestHandler):
                 ranked_jobs = rank_jobs_for_cv(cv_text, FALLBACK_JOBS, target_role)
                 agent = build_agent_result(cv_text, target_role, FALLBACK_JOBS, ranked_jobs)
                 summary = build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta}
-                llm_report = safe_llm_report(cv_text, summary, ranked_jobs, agent)
                 feedback_loop = safe_feedback_loop(cv_text, metadata, preferences, ranked_jobs)
+                report_jobs = feedback_loop.get("recommendedJobs", []) if isinstance(feedback_loop, dict) else []
+                llm_report = safe_llm_report(cv_text, summary, report_jobs, agent)
                 self.write_stream_event(
                     "final",
                     {
