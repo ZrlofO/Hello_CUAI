@@ -39,6 +39,29 @@
         </div>
       </section>
 
+
+      <section class="page-section jobs-section" aria-labelledby="popularJobsTitle">
+        <div class="section-heading between">
+          <div>
+            <span class="eyebrow">Popular Jobs</span>
+            <h2 id="popularJobsTitle">지금 많이 보는 채용 공고</h2>
+            <p>목표 직무를 고르기 전에도 시장에서 자주 보이는 역할과 요구 역량을 빠르게 확인하세요.</p>
+          </div>
+          <a class="button secondary" href="diagnosis.html">내 CV와 비교하기</a>
+        </div>
+        <div class="job-toolbar">
+          <button class="job-filter active" data-job-filter="all" type="button">전체</button>
+          <button class="job-filter" data-job-filter="ai" type="button">AI·데이터</button>
+          <button class="job-filter" data-job-filter="dev" type="button">개발</button>
+          <button class="job-filter" data-job-filter="product" type="button">기획</button>
+        </div>
+        <div class="jobs-grid" id="popularJobs" aria-live="polite">
+          <article class="job-card skeleton"></article>
+          <article class="job-card skeleton"></article>
+          <article class="job-card skeleton"></article>
+        </div>
+      </section>
+
       <section class="page-section compact-section">
         <div class="section-heading center">
           <span class="eyebrow">Closed Loop</span>
@@ -78,5 +101,6 @@
     </main>
 
     <footer class="footer"><p>HICAREER</p><span>CV를 전략으로 바꾸는 AI 취업 성장 파트너</span></footer>
+    <script src="jobs.js"></script>
   </body>
 </html>
