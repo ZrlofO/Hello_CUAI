@@ -10,6 +10,7 @@ const pdfRoleInput = document.querySelector("#pdfRoleInput");
 const extractButton = document.querySelector("#extractButton");
 const analyzeButton = document.querySelector("#analyzeButton");
 const resultCard = document.querySelector("#resultCard");
+let liveLaneState = {};
 
 const metadataConfig = {
   education: { label: "교육", fields: { school: "학교", degree: "학위", major: "전공", period: "기간", gpa: "GPA", raw_text: "원문" } },
@@ -301,10 +302,240 @@ function renderAgentConversationItem(item, index = 0) {
   `;
 }
 
+function normalizeCalendarDate(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
+  if (!match) return "";
+  const [, year, month, day] = match;
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+}
+
+function compactCalendarDate(value) {
+  return String(value || "").replaceAll("-", "");
+}
+
+function parseCalendarTime(value) {
+  const text = String(value || "");
+  const match = text.match(/(\d{1,2}):(\d{2})/);
+  if (!match) return "";
+  return `${match[1].padStart(2, "0")}${match[2]}00`;
+}
+
+function addOneHour(timeValue) {
+  const normalized = parseCalendarTime(timeValue);
+  if (!normalized) return "";
+  const hour = Math.min(Number(normalized.slice(0, 2)) + 1, 23);
+  return `${String(hour).padStart(2, "0")}${normalized.slice(2)}`;
+}
+
+function buildGoogleCalendarUrl(item = {}) {
+  const date = normalizeCalendarDate(item.date || item.deadline || item.period);
+  if (!date || !item.title) return "";
+  const compactDate = compactCalendarDate(date);
+  const startTime = parseCalendarTime(item.time);
+  const endTime = addOneHour(item.time);
+  const nextDay = new Date(`${date}T00:00:00`);
+  nextDay.setDate(nextDay.getDate() + 1);
+  const compactNextDate = compactCalendarDate(nextDay.toISOString().slice(0, 10));
+  const dates = startTime ? `${compactDate}T${startTime}/${compactDate}T${endTime}` : `${compactDate}/${compactNextDate}`;
+  const details = [
+    item.why_on_calendar,
+    item.related_gap ? `Related gap: ${item.related_gap}` : "",
+    item.source_url ? `Source: ${item.source_url}` : "",
+    item.confirmation_required ? "사용자 확인 후 등록하는 일정 초안입니다." : "",
+  ].filter(Boolean).join("\n");
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: item.title,
+    dates,
+    details,
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
+function getCalendarViewDate(calendar = []) {
+  const datedItem = calendar.find((item) => normalizeCalendarDate(item.date || item.deadline || item.period));
+  const normalized = datedItem ? normalizeCalendarDate(datedItem.date || datedItem.deadline || datedItem.period) : "";
+  return normalized ? new Date(`${normalized}T00:00:00`) : new Date();
+}
+
+function renderMonthCalendar(calendar = []) {
+  const viewDate = getCalendarViewDate(calendar);
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+  const firstDay = new Date(year, month, 1).getDay();
+  const lastDate = new Date(year, month + 1, 0).getDate();
+  const eventsByDate = calendar.reduce((accumulator, item) => {
+    const date = normalizeCalendarDate(item.date || item.deadline || item.period);
+    if (!date) return accumulator;
+    accumulator[date] = [...(accumulator[date] || []), item];
+    return accumulator;
+  }, {});
+  const cells = Array.from({ length: Math.ceil((firstDay + lastDate) / 7) * 7 }, (_, index) => {
+    const day = index - firstDay + 1;
+    if (day < 1 || day > lastDate) return `<span class="month-calendar-cell is-empty" aria-hidden="true"></span>`;
+    const date = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const events = eventsByDate[date] || [];
+    return `
+      <div class="month-calendar-cell ${events.length ? "has-event" : ""}">
+        <strong>${day}</strong>
+        ${events.slice(0, 2).map((item) => `<span title="${escapeHtml(item.title || "일정 후보")}">${escapeHtml(item.title || "일정 후보")}</span>`).join("")}
+        ${events.length > 2 ? `<em>+${events.length - 2}</em>` : ""}
+      </div>
+    `;
+  });
+
+  return `
+    <section class="month-calendar" aria-label="일정 캘린더">
+      <div class="month-calendar-header">
+        <div>
+          <span>Calendar</span>
+          <strong>${year}년 ${month + 1}월</strong>
+        </div>
+        <small>검증된 날짜가 있는 일정만 표시합니다.</small>
+      </div>
+      <div class="month-calendar-weekdays"><span>일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span>토</span></div>
+      <div class="month-calendar-days">${cells.join("")}</div>
+    </section>
+  `;
+}
+
+function renderCalendarDraft(calendar = []) {
+  return `
+    <article class="planner-calendar">
+      <div class="planner-section-heading">
+        <div><span>Planner Agent</span><h6>Calendar Draft</h6></div>
+        <small>사용자 확인 후 등록</small>
+      </div>
+      ${renderMonthCalendar(calendar)}
+      ${calendar.length ? `
+        <div class="calendar-stack">
+          ${calendar.map((item) => {
+            const displayDate = [item.date, item.time, item.period, item.deadline].filter(Boolean).join(" · ") || "날짜 확인 필요";
+            const googleCalendarUrl = buildGoogleCalendarUrl(item);
+            return `
+              <section class="calendar-draft-card">
+                <div class="calendar-date-badge">
+                  <span>${escapeHtml(normalizeCalendarDate(item.date || item.deadline || item.period) || "확인 필요")}</span>
+                  <strong>${escapeHtml(item.type || "draft")}</strong>
+                </div>
+                <div>
+                  <strong>${escapeHtml(item.title || "일정 후보")}</strong>
+                  <p>${escapeHtml(item.why_on_calendar || item.related_gap || "")}</p>
+                  <small>${escapeHtml(displayDate)}</small>
+                  ${item.confirmation_required ? `<em>사용자 확인 필요: ${escapeHtml(item.confirmation_reason || "원문 일정 확인 필요")}</em>` : ""}
+                  <div class="calendar-actions">
+                    ${googleCalendarUrl ? `<a href="${escapeHtml(googleCalendarUrl)}" target="_blank" rel="noopener noreferrer">Google Calendar에 추가</a>` : ""}
+                    ${item.source_url ? `<a href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener noreferrer">원문 확인</a>` : ""}
+                  </div>
+                </div>
+              </section>
+            `;
+          }).join("")}
+        </div>
+      ` : `<p class="planner-empty">URL과 날짜가 함께 검증된 확정 일정 후보가 아직 없습니다.</p>`}
+    </article>
+  `;
+}
+
+function renderTodoDraft(todos = []) {
+  return `
+    <article class="planner-todos">
+      <h6>Todo List</h6>
+      ${todos.length ? todos.map((item) => `
+        <section class="planner-card">
+          <strong>${escapeHtml(item.title || "Todo")}</strong>
+          <p>${escapeHtml(item.related_gap || item.evidence || "")}</p>
+          ${renderList(item.action_steps || [])}
+          <small>${escapeHtml([item.priority, item.estimated_effort, item.due_basis].filter(Boolean).join(" · "))}</small>
+          ${item.source_url ? `<a href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener noreferrer">근거 확인</a>` : ""}
+        </section>
+      `).join("") : `<p class="planner-empty">Todo가 아직 없습니다.</p>`}
+    </article>
+  `;
+}
+
+function renderWorkflowStep(number, title, description, content, { current = false } = {}) {
+  return `
+    <section class="workflow-step ${current ? "is-current" : ""}">
+      <header class="workflow-step-header">
+        <span>STEP ${String(number).padStart(2, "0")}</span>
+        <div>
+          <h4>${escapeHtml(title)}</h4>
+          ${description ? `<p>${escapeHtml(description)}</p>` : ""}
+        </div>
+      </header>
+      <div class="workflow-step-body">${content}</div>
+    </section>
+  `;
+}
+
+function renderPlannerSection(planner = {}) {
+  const calendar = planner.calendar_draft || [];
+  const todos = planner.todo_list || [];
+  const weekly = planner.weekly_plan || [];
+  const uncertain = planner.uncertain_items || [];
+  const sourceLinks = planner.source_links || [];
+
+  return `
+    <div class="planner-section">
+      <div class="agent-header">
+        <span class="result-label">Planner Agent</span>
+        <h5>Calendar Draft & Todo</h5>
+        ${planner.planner_summary ? `<p>${escapeHtml(planner.planner_summary)}</p>` : ""}
+      </div>
+
+      <div class="planner-grid planner-stack">
+        ${renderCalendarDraft(calendar)}
+        ${renderTodoDraft(todos)}
+      </div>
+
+      ${weekly.length ? `
+        <div class="planner-weekly">
+          <h6>Weekly Plan</h6>
+          ${weekly.map((item) => `
+            <article>
+              <strong>${escapeHtml(item.week || "Week")}: ${escapeHtml(item.goal || "")}</strong>
+              ${renderList(item.tasks || [])}
+              <small>${escapeHtml(item.expected_output || "")}</small>
+            </article>
+          `).join("")}
+        </div>
+      ` : ""}
+
+      ${uncertain.length ? `
+        <div class="planner-uncertain">
+          <h6>확인 필요 항목</h6>
+          ${uncertain.map((item) => `
+            <article>
+              <strong>${escapeHtml(item.item || "확인 필요")}</strong>
+              <p>${escapeHtml(item.reason || "")}</p>
+              <small>${escapeHtml(item.needed_confirmation || "")}</small>
+              ${item.source_url ? `<a href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener noreferrer">출처 확인</a>` : ""}
+            </article>
+          `).join("")}
+        </div>
+      ` : ""}
+
+      ${sourceLinks.length ? `
+        <div class="planner-sources">
+          <h6>Planner가 사용한 source</h6>
+          ${sourceLinks.slice(0, 12).map((item) => `
+            <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title || item.url)} <span>${escapeHtml(item.used_for || item.source_name || "")}</span></a>
+          `).join("")}
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
 function renderFeedbackLoop(loop) {
-  if (!loop) return "";
+  if (!loop) return renderWorkflowStep(5, "Calendar & Todo", "다음 행동을 계획하는 단계입니다.", renderPlannerSection({}), { current: true });
   if (loop.error) {
-    return `<div class="feedback-loop"><span class="result-label">Agent Feedback Loop</span><h4>Feedback Loop를 실행하지 못했습니다.</h4><p>${loop.error}</p></div>`;
+    return `
+      ${renderWorkflowStep(2, "Agent Feedback Loop", "분석 과정에서 일부 오류가 발생했습니다.", `<p>${escapeHtml(loop.error)}</p>`)}
+      ${renderWorkflowStep(5, "Calendar & Todo", "일정과 할 일을 확인하고 등록할 수 있습니다.", renderPlannerSection(loop.plannerResult || {}), { current: true })}
+    `;
   }
 
   const report = loop.leadingReport || {};
@@ -313,15 +544,10 @@ function renderFeedbackLoop(loop) {
   const reviews = loop.supportingReviews || {};
   const reviewEntries = Object.entries(reviews);
   const recommendations = consult.recommendations || [];
+  const planner = loop.plannerResult || {};
 
   return `
-    <div class="feedback-loop">
-      <div class="agent-header">
-        <span class="result-label">Agent Feedback Loop</span>
-        <h4>Multi-Agent가 보완 방향을 검토했습니다.</h4>
-        ${report.summary ? `<p>${report.summary}</p>` : ""}
-      </div>
-
+    ${renderWorkflowStep(2, "Agent 대화 및 호출 판단", report.summary || "Leading Agent와 Consult Agent가 검토 범위를 정했습니다.", `
       <div class="feedback-status">
         <article>
           <span>최종 상태</span>
@@ -340,10 +566,10 @@ function renderFeedbackLoop(loop) {
       <div class="conversation-log discussion-flow">
         <div class="agent-header">
           <span class="result-label">Agent Conversation</span>
-          <h4>Agent 대화 로그</h4>
+          <h4>Global Agent Timeline</h4>
         </div>
         <div class="discussion-flow-list">
-          ${(loop.conversationLog || []).map(renderAgentConversationItem).join("")}
+          ${(loop.conversationLog || []).filter((item) => !item.lane && !item.agent_key).map(renderAgentConversationItem).join("")}
         </div>
       </div>
 
@@ -356,7 +582,9 @@ function renderFeedbackLoop(loop) {
           </article>
         `).join("")}
       </div>
+    `)}
 
+    ${renderWorkflowStep(3, "Supporting Agent 병렬 검토", "각 전문 Agent가 보완할 증거와 실행 방향을 검토했습니다.", `
       <div class="supporting-reviews">
         <h5>Supporting Agent 검토 결과</h5>
         ${reviewEntries.map(([key, review]) => `
@@ -389,7 +617,9 @@ function renderFeedbackLoop(loop) {
           </article>
         `).join("")}
       </div>
+    `)}
 
+    ${renderWorkflowStep(4, "Consult Agent 최종 통합", "검토 결과와 외부 검색 근거를 바탕으로 우선순위를 정했습니다.", `
       <div class="consult-final">
         <h5>Consult Agent 최종 통합</h5>
         ${renderList(classification.reason || [])}
@@ -413,7 +643,9 @@ function renderFeedbackLoop(loop) {
           `).join("")}
         </div>
       ` : ""}
-    </div>
+    `)}
+
+    ${renderWorkflowStep(5, "Calendar & Todo", "확정된 우선순위를 일정과 실행 항목으로 옮겼습니다.", renderPlannerSection(planner), { current: true })}
   `;
 }
 
@@ -434,24 +666,57 @@ function renderLoading() {
 }
 
 function renderStreamingShell() {
+  liveLaneState = {};
   resultCard.innerHTML = `
     <span class="result-label">실시간 Agent Feedback Loop</span>
     <h3>Agent들이 대화하며 보완 방향을 만들고 있습니다.</h3>
     <p class="extract-meta" id="liveStatus">입력한 Metadata를 서버로 보내고 있습니다.</p>
     <div class="analysis-loading"><span></span><span></span><span></span></div>
-    <div class="discussion-flow live-feedback">
+    <div class="lane-conversations live-lanes">
       <div class="agent-header">
-        <span class="result-label">Agent Conversation</span>
-        <h4>Agent 실시간 대화</h4>
+        <span class="result-label">Parallel Agent Lanes</span>
+        <h4>Consult Clone ↔ Supporting Agent 1:1 대화</h4>
       </div>
-      <div class="discussion-flow-list live-chat" id="liveConversation">
-      </div>
+      <div class="lane-grid" id="liveLaneGrid"></div>
     </div>
   `;
 }
 
+function ensureLiveLaneCard(meta = {}) {
+  const key = meta.agentKey || meta.lane || meta.agent_key;
+  const grid = document.querySelector("#liveLaneGrid");
+  if (!grid || !key) return null;
+  if (!liveLaneState[key]) {
+    liveLaneState[key] = {
+      agentName: meta.agentName || meta.agent_name || key,
+      consultCloneName: meta.consultCloneName || `Consult Agent Clone · ${meta.agentName || key}`,
+      count: 0,
+    };
+    const lane = document.createElement("section");
+    lane.className = "agent-lane";
+    lane.dataset.lane = key;
+    lane.innerHTML = `
+      <div class="lane-heading">
+        <span>${escapeHtml(key)}</span>
+        <strong>${escapeHtml(liveLaneState[key].agentName)}</strong>
+        <small>${escapeHtml(liveLaneState[key].consultCloneName)}</small>
+      </div>
+      <div class="lane-chat" data-lane-chat="${escapeHtml(key)}"></div>
+    `;
+    grid.appendChild(lane);
+  }
+  return [...grid.querySelectorAll("[data-lane-chat]")].find((item) => item.dataset.laneChat === key) || null;
+}
+
 function appendLiveConversation(message) {
-  const container = document.querySelector("#liveConversation");
+  const laneKey = message?.lane || message?.agent_key;
+  if (!laneKey) {
+    if (message?.from && message?.to) {
+      setLiveStatus(`${message.from} → ${message.to}: ${message.message}`);
+    }
+    return;
+  }
+  const container = ensureLiveLaneCard({ agentKey: laneKey });
   if (!container || !message?.message) return;
   const row = document.createElement("article");
   const turnNumber = container.querySelectorAll(".dialogue-turn").length + 1;
@@ -536,11 +801,21 @@ async function analyzeManualStream() {
       if (item.event === "agents_selected") {
         setLiveStatus(`Consult Agent가 ${(item.payload?.activatedAgents || []).length}개의 Supporting Agent를 선택했습니다.`);
       }
+      if (item.event === "lane_started") {
+        ensureLiveLaneCard(item.payload || {});
+        setLiveStatus(`${item.payload?.agentName || "Supporting Agent"} lane이 시작되었습니다.`);
+      }
       if (item.event === "supporting_review") {
         setLiveStatus(`${item.payload?.review?.agent_name || "Supporting Agent"}의 검토 결과가 도착했습니다.`);
       }
+      if (item.event === "consult_clone_review") {
+        setLiveStatus(`${item.payload?.lane?.agent_name || "Support Agent"} lane의 Consult Clone 검토가 완료되었습니다.`);
+      }
       if (item.event === "consult_result") {
         setLiveStatus("Consult Agent가 최종 통합 결과를 전달했습니다.");
+      }
+      if (item.event === "planner_result") {
+        setLiveStatus("Planner Agent가 Calendar Draft와 Todo 초안을 전달했습니다.");
       }
       if (item.event === "final") {
         finalData = item.payload;
@@ -570,42 +845,57 @@ function renderAnalysis(data) {
       <div><strong>${rankedJobs.length}</strong><span>추천 공고</span></div>
     </div>
     <p class="extract-meta">정리 방식: ${summary.pdf?.method || "manual"}</p>
-    ${renderLlmReport(data.llmReport)}
-    <div class="analysis-block">
-      <h4>강점</h4>
-      <ul>${summary.strengths.map((item) => `<li>${item}</li>`).join("")}</ul>
-    </div>
-    <div class="analysis-block">
-      <h4>보완할 증거</h4>
-      <ul>${summary.gaps.map((item) => `<li>${item}</li>`).join("")}</ul>
-    </div>
-    ${renderFeedbackLoop(data.feedbackLoop)}
-    ${renderAgent(data.agent)}
-    <div class="ranked-jobs">
-      <h4>추천 채용공고 ranking</h4>
-      ${rankedJobs
-        .map(
-          (job, index) => `
-            <article class="ranked-job-card">
-              <div class="job-card-top">
-                <span class="fit high">#${index + 1} Fit ${job.fit}</span>
-                <span class="deadline">${job.deadline}</span>
-              </div>
-              <span class="job-source">${job.source || "검색"}</span>
-              <h4>${job.title}</h4>
-              <p class="company">${job.company}</p>
-              <p class="job-meta">${job.location}</p>
-              <div class="skill-row">${job.skills.map((skill) => `<span>${skill}</span>`).join("")}</div>
-              <ul class="fit-list">
-                ${job.fitReasons.map((reason) => `<li>${reason}</li>`).join("")}
-              </ul>
-              <p class="gap-copy"><strong>보완:</strong> ${job.gaps[0]}</p>
-              <a href="${job.url}" target="_blank" rel="noopener noreferrer">공고 보기</a>
-            </article>
-          `,
-        )
-        .join("")}
-    </div>
+    <section class="workflow-section" aria-label="분석 워크플로우">
+      <div class="workflow-section-header">
+        <div>
+          <span class="result-label">Analysis Workflow</span>
+          <h4>단계별 결과를 옆으로 넘겨 확인하세요.</h4>
+        </div>
+        <small>가로 스크롤</small>
+      </div>
+      <div class="workflow-steps">
+        ${renderWorkflowStep(1, "CV 초기 진단", "입력한 Metadata와 목표 직무를 기준으로 현재 증거를 정리했습니다.", `
+          ${renderLlmReport(data.llmReport)}
+          <div class="analysis-block">
+            <h4>강점</h4>
+            <ul>${summary.strengths.map((item) => `<li>${item}</li>`).join("")}</ul>
+          </div>
+          <div class="analysis-block">
+            <h4>보완할 증거</h4>
+            <ul>${summary.gaps.map((item) => `<li>${item}</li>`).join("")}</ul>
+          </div>
+        `)}
+        ${renderFeedbackLoop(data.feedbackLoop)}
+        ${renderWorkflowStep(6, "Retrieval Fit 결과", "추천 채용공고와 초기 AI 분석을 다시 확인할 수 있습니다.", `
+          ${renderAgent(data.agent)}
+          <div class="ranked-jobs">
+            <h4>추천 채용공고 ranking</h4>
+            ${rankedJobs
+              .map(
+                (job, index) => `
+                  <article class="ranked-job-card">
+                    <div class="job-card-top">
+                      <span class="fit high">#${index + 1} Fit ${job.fit}</span>
+                      <span class="deadline">${job.deadline}</span>
+                    </div>
+                    <span class="job-source">${job.source || "검색"}</span>
+                    <h4>${job.title}</h4>
+                    <p class="company">${job.company}</p>
+                    <p class="job-meta">${job.location}</p>
+                    <div class="skill-row">${job.skills.map((skill) => `<span>${skill}</span>`).join("")}</div>
+                    <ul class="fit-list">
+                      ${job.fitReasons.map((reason) => `<li>${reason}</li>`).join("")}
+                    </ul>
+                    <p class="gap-copy"><strong>보완:</strong> ${job.gaps[0]}</p>
+                    <a href="${job.url}" target="_blank" rel="noopener noreferrer">공고 보기</a>
+                  </article>
+                `,
+              )
+              .join("")}
+          </div>
+        `)}
+      </div>
+    </section>
   `;
   bindActionChecks();
 }

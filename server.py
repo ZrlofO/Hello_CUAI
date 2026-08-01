@@ -12,6 +12,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Lock
 from xml.etree import ElementTree
 
 from dotenv import load_dotenv
@@ -1424,6 +1425,7 @@ CONSULT_AGENT_PROMPT = load_agent_prompt("consult_agent.md")
 SUPPORTING_COMMON_PROMPT = load_agent_prompt("supporting_common.md")
 RETRIEVAL_ONLY_PROMPT = load_agent_prompt("retrieval_only.md")
 JSON_REPAIR_PROMPT = load_agent_prompt("json_repair.md")
+PLANNER_AGENT_PROMPT = load_agent_prompt("planner_agent.md")
 
 
 def repair_openai_json(raw_text, expected_schema, context_label="agent output"):
@@ -2049,6 +2051,21 @@ def call_consult_agent_review(metadata, preferences, ranked_jobs, plan, supporti
                 "reason": ["string"],
             },
             "recommended_focus": ["string"],
+            "planner_handoff": {
+                "planning_goal": "string",
+                "priority_order": ["string"],
+                "activities_to_plan": [
+                    {
+                        "target_gap": "string",
+                        "action_type": "string",
+                        "source_requirement": "string",
+                        "schedule_sensitivity": "high | medium | low",
+                        "notes_for_planner": "string",
+                    }
+                ],
+                "constraints_to_confirm": ["string"],
+                "do_not_plan": ["string"],
+            },
             "handoff_to_leading_agent": "string",
             "conversation_log": [{"from": "Consult Agent", "to": "string", "message": "string"}],
         },
@@ -2110,6 +2127,22 @@ def fallback_consult_agent_review(metadata, preferences, plan, supporting_review
             ],
         },
         "recommended_focus": recommended_focus[:5] or ["프로젝트/경험의 역할, 산출물, 성과를 구체화해주세요."],
+        "planner_handoff": {
+            "planning_goal": "Consult Agent가 확인한 priority gap을 실행 가능한 일정 초안과 todo로 바꿔주세요.",
+            "priority_order": recommended_focus[:5],
+            "activities_to_plan": [
+                {
+                    "target_gap": item.get("gap", ""),
+                    "action_type": item.get("recommended_action_type", ""),
+                    "source_requirement": "검증된 URL과 날짜가 있는 경우에만 calendar_draft에 넣어주세요.",
+                    "schedule_sensitivity": "medium",
+                    "notes_for_planner": item.get("evidence_from_metadata", ""),
+                }
+                for item in priority_gaps[:5]
+            ],
+            "constraints_to_confirm": ["available_time_per_week", "preferred_weekdays", "start_date"],
+            "do_not_plan": ["URL 또는 일정 근거가 없는 외부 대회/시험을 확정 일정으로 만들지 마세요."],
+        },
         "handoff_to_leading_agent": "구조화 가능한 근거만 사용해 사용자용 보고서로 정리해주세요.",
         "conversation_log": [
             {
@@ -2121,7 +2154,359 @@ def fallback_consult_agent_review(metadata, preferences, plan, supporting_review
     }
 
 
-def call_leading_agent_final(metadata, preferences, consult_result):
+def compact_source_link(item, default_used_for="planning_reference"):
+    if not isinstance(item, dict):
+        return None
+    url = clean_text(item.get("url", "") or item.get("source_url", ""))
+    title = clean_text(item.get("title", "") or item.get("name", "") or item.get("source", ""))
+    if not url and not title:
+        return None
+    return {
+        "title": title or url,
+        "url": url,
+        "source_name": clean_text(item.get("source_name", "") or item.get("source", "")),
+        "used_for": clean_text(item.get("used_for", "") or default_used_for),
+        "deadline": clean_text(item.get("deadline", "")),
+        "period": clean_text(item.get("period", "")),
+        "related_gap": clean_text(item.get("related_gap", "") or item.get("target_gap", "")),
+        "status_note": clean_text(item.get("status_note", "")),
+    }
+
+
+def collect_planner_verified_sources(retrieval_context, supporting_search_results, consult_result):
+    collected = []
+    seen = set()
+
+    def add(item, default_used_for="planning_reference"):
+        link = compact_source_link(item, default_used_for=default_used_for)
+        if not link:
+            return
+        key = link.get("url") or link.get("title")
+        if not key or key in seen:
+            return
+        seen.add(key)
+        collected.append(link)
+
+    for item in (retrieval_context or {}).get("benchmark_sources", [])[:10]:
+        add(item, "benchmark")
+    for item in (retrieval_context or {}).get("success_case_sources", [])[:20]:
+        add(item, "success_case_reference")
+    for item in (retrieval_context or {}).get("recommendation_sources", [])[:20]:
+        add(item, "recommendation_reference")
+
+    for agent_key, result in (supporting_search_results or {}).items():
+        if not isinstance(result, dict):
+            continue
+        for item in result.get("verified_sources", [])[:8]:
+            link = compact_source_link(item, default_used_for=item.get("used_for", "supporting_agent_reference"))
+            if link:
+                link["agent_key"] = agent_key
+                add(link, link.get("used_for", "supporting_agent_reference"))
+
+    for item in (consult_result or {}).get("recommendations", [])[:20]:
+        add(item, "consult_recommendation")
+
+    return collected[:40]
+
+
+def build_planner_input(metadata, preferences, consult_result, retrieval_context, supporting_search_results):
+    preferences = preferences if isinstance(preferences, dict) else {}
+    user_constraints = {
+        "target_role": preferences.get("target_role", ""),
+        "preparation_period": preferences.get("preparation_period", ""),
+        "available_time_per_week": preferences.get("available_time_per_week", ""),
+        "preferred_weekdays": preferences.get("preferred_weekdays", ""),
+        "preferred_location": preferences.get("preferred_location", ""),
+        "online_or_offline_preference": preferences.get("online_or_offline_preference", ""),
+        "budget": preferences.get("budget", ""),
+        "start_date": preferences.get("start_date", ""),
+    }
+    return {
+        "metadata_summary": {
+            key: value for key, value in (metadata or {}).items()
+            if key in ("education", "projects_and_experience", "awards", "leadership_and_volunteering", "languages_and_certificates", "skills")
+        },
+        "preferences": preferences,
+        "user_constraints": user_constraints,
+        "consult_result": {
+            "final_classification": (consult_result or {}).get("final_classification", {}),
+            "priority_gaps": (consult_result or {}).get("priority_gaps", []),
+            "recommendations": (consult_result or {}).get("recommendations", []),
+            "recommended_focus": (consult_result or {}).get("recommended_focus", []),
+            "planner_handoff": (consult_result or {}).get("planner_handoff", {}),
+        },
+        "verified_sources": collect_planner_verified_sources(retrieval_context, supporting_search_results, consult_result),
+        "planning_policy": {
+            "calendar_is_draft_only": True,
+            "calendar_write_requires_user_confirmation": True,
+            "do_not_invent_dates": True,
+            "confirmed_calendar_item_requires_source_url_and_date": True,
+            "missing_user_constraints_must_be_listed": True,
+        },
+    }
+
+
+def has_calendar_date(item):
+    if not isinstance(item, dict):
+        return False
+    date_text = " ".join(
+        clean_text(item.get(key, ""))
+        for key in ("date", "deadline", "period")
+    )
+    if not date_text:
+        return False
+    if re.search(r"\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}[./]\d{1,2}|D-\s*\d+", date_text):
+        return True
+    return False
+
+
+def fallback_planner_result(planner_input):
+    consult = planner_input.get("consult_result", {})
+    priority_gaps = consult.get("priority_gaps", [])
+    recommendations = consult.get("recommendations", [])
+    verified_sources = planner_input.get("verified_sources", [])
+    constraints = planner_input.get("user_constraints", {})
+
+    calendar_draft = []
+    uncertain_items = []
+    for source in verified_sources[:12]:
+        if source.get("url") and has_calendar_date(source):
+            calendar_draft.append(
+                {
+                    "title": source.get("title", "확인 필요 일정"),
+                    "type": "other",
+                    "date": "",
+                    "time": "",
+                    "period": source.get("period", ""),
+                    "deadline": source.get("deadline", ""),
+                    "source_url": source.get("url", ""),
+                    "source_name": source.get("source_name", ""),
+                    "related_gap": source.get("related_gap", ""),
+                    "why_on_calendar": "출처와 일정 표현이 함께 확인되어 캘린더 후보로만 올렸습니다.",
+                    "confirmation_required": True,
+                    "confirmation_reason": "원문 페이지에서 최신 일정과 접수 상태를 사용자가 확인해야 합니다.",
+                }
+            )
+        else:
+            uncertain_items.append(
+                {
+                    "item": source.get("title", "외부 기회"),
+                    "reason": "URL 또는 일정 정보가 충분히 확인되지 않아 확정 일정으로 넣지 않았습니다.",
+                    "needed_confirmation": "원문 페이지의 모집 여부, 마감일, 진행 기간을 확인해주세요.",
+                    "source_url": source.get("url", ""),
+                }
+            )
+
+    todo_list = []
+    for index, gap in enumerate(priority_gaps[:6], start=1):
+        if not isinstance(gap, dict):
+            continue
+        todo_list.append(
+            {
+                "title": f"{index}. {gap.get('gap', '보완 항목')} 보완",
+                "priority": gap.get("priority", "high") if gap.get("priority") in ("high", "medium", "low") else "high",
+                "category": "other",
+                "related_gap": gap.get("gap", ""),
+                "evidence": gap.get("evidence_from_metadata", ""),
+                "action_steps": [
+                    "현재 CV에 명시된 사실만 기준으로 역할, 산출물, 성과를 정리해주세요.",
+                    "필요한 외부 활동은 출처 URL과 최신 일정을 확인한 뒤 확정해주세요.",
+                ],
+                "estimated_effort": "사용자 가능 시간이 확인되면 재산정 필요",
+                "due_basis": "준비 기간과 가능 시간이 아직 충분히 확인되지 않아 임시 우선순위로 배치했습니다.",
+                "source_url": "",
+                "confirmation_required": True,
+            }
+        )
+
+    if not todo_list:
+        todo_list.append(
+            {
+                "title": "우선순위 gap 재확인",
+                "priority": "medium",
+                "category": "retrieval_check",
+                "related_gap": "Consult Agent priority gaps",
+                "evidence": "Consult Agent 결과 기준",
+                "action_steps": ["목표 직무, 준비 기간, 주당 가능 시간을 먼저 확인해주세요."],
+                "estimated_effort": "30분",
+                "due_basis": "계획 수립 전 확인 단계",
+                "source_url": "",
+                "confirmation_required": True,
+            }
+        )
+
+    missing_constraints = [
+        label for key, label in (
+            ("available_time_per_week", "주당 투자 가능 시간"),
+            ("preferred_weekdays", "선호 요일"),
+            ("start_date", "계획 시작일"),
+        )
+        if not constraints.get(key)
+    ]
+    for label in missing_constraints:
+        uncertain_items.append(
+            {
+                "item": label,
+                "reason": "사용자 입력이 없어 주차별 계획을 확정하지 않았습니다.",
+                "needed_confirmation": f"{label}을 입력해주세요.",
+                "source_url": "",
+            }
+        )
+
+    weekly_plan = [
+        {
+            "week": "Week 1",
+            "goal": "핵심 gap과 외부 일정 확인",
+            "tasks": [
+                "Consult Agent가 표시한 priority gap을 사용자와 확인합니다.",
+                "외부 대회/시험/채용 URL의 최신 모집 여부와 마감일을 확인합니다.",
+            ],
+            "expected_output": "확정 가능한 calendar item 목록과 보류 항목 목록",
+            "confirmation_required": True,
+        },
+        {
+            "week": "Week 2",
+            "goal": "CV 근거 보강 초안 작성",
+            "tasks": [
+                "프로젝트/경험별 역할, 산출물, 성과 문장을 보강합니다.",
+                "필요한 시험·대회·활동은 확인된 일정만 기준으로 준비 단계를 쪼갭니다.",
+            ],
+            "expected_output": "수정된 CV bullet 초안과 지원 준비 todo",
+            "confirmation_required": True,
+        },
+    ]
+
+    return {
+        "planner_summary": "검증된 출처와 사용자 제약이 부족한 항목은 확정 일정으로 넣지 않고 확인 필요로 분리했습니다.",
+        "calendar_draft": calendar_draft[:10],
+        "todo_list": todo_list,
+        "weekly_plan": weekly_plan,
+        "source_links": [
+            {
+                "title": source.get("title", ""),
+                "url": source.get("url", ""),
+                "source_name": source.get("source_name", ""),
+                "used_for": source.get("used_for", ""),
+            }
+            for source in verified_sources[:20]
+            if source.get("url")
+        ],
+        "confirmation_questions": [f"{label}을 알려주시면 일정을 더 정확히 쪼갤 수 있습니다." for label in missing_constraints],
+        "uncertain_items": uncertain_items[:20],
+        "calendar_write_request": {
+            "requires_user_confirmation": True,
+            "message": "아직 Google Calendar에는 아무 것도 쓰지 않았습니다. 사용자가 확인한 뒤에만 캘린더 등록 단계로 넘어갑니다.",
+        },
+        "conversation_message": {
+            "from": "Planner Agent",
+            "to": "Leading Agent",
+            "message": f"확정 가능한 캘린더 후보 {len(calendar_draft[:10])}개, Todo {len(todo_list)}개, 확인 필요 항목 {len(uncertain_items[:20])}개로 계획 초안을 정리했습니다.",
+        },
+    }
+
+
+def normalize_planner_result(result):
+    if not isinstance(result, dict):
+        return fallback_planner_result({"consult_result": {}, "verified_sources": [], "user_constraints": {}})
+    if isinstance(result.get("planner_result"), dict):
+        result = result["planner_result"]
+
+    if result.get("planning_summary") and not result.get("planner_summary"):
+        result["planner_summary"] = result.get("planning_summary")
+
+    normalized_calendar = []
+    for item in result.get("calendar_draft", []) or []:
+        if not isinstance(item, dict):
+            continue
+        normalized_calendar.append(
+            {
+                "title": item.get("title", ""),
+                "type": item.get("type", ""),
+                "date": item.get("date", ""),
+                "time": item.get("time", "") or " ".join(value for value in [item.get("start_time", ""), item.get("end_time", "")] if value),
+                "period": item.get("period", ""),
+                "deadline": item.get("deadline", ""),
+                "source_url": item.get("source_url", "") or item.get("url", ""),
+                "source_name": item.get("source_name", "") or item.get("source", ""),
+                "related_gap": item.get("related_gap", ""),
+                "why_on_calendar": item.get("why_on_calendar", "") or item.get("reason", ""),
+                "confirmation_required": bool(item.get("confirmation_required", True)),
+                "confirmation_reason": item.get("confirmation_reason", "") or ("사용자 확인 후 캘린더 반영이 필요합니다." if item.get("confirmation_required", True) else ""),
+            }
+        )
+    result["calendar_draft"] = normalized_calendar
+
+    normalized_todos = []
+    for item in result.get("todo_list", []) or []:
+        if not isinstance(item, dict):
+            continue
+        normalized_todos.append(
+            {
+                "title": item.get("title", "") or item.get("task", ""),
+                "priority": item.get("priority", "medium"),
+                "category": item.get("category", "other"),
+                "related_gap": item.get("related_gap", ""),
+                "evidence": item.get("evidence", ""),
+                "action_steps": item.get("action_steps", []) or ([item.get("task", "")] if item.get("task") else []),
+                "estimated_effort": item.get("estimated_effort", "") or item.get("estimated_time", ""),
+                "due_basis": item.get("due_basis", "") or item.get("deadline", ""),
+                "source_url": item.get("source_url", "") or item.get("url", ""),
+                "confirmation_required": bool(item.get("confirmation_required", True)),
+                "status": item.get("status", "not_started"),
+            }
+        )
+    result["todo_list"] = normalized_todos
+
+    normalized_weekly = []
+    for item in result.get("weekly_plan", []) or []:
+        if not isinstance(item, dict):
+            continue
+        normalized_weekly.append(
+            {
+                "week": str(item.get("week", "")),
+                "goal": item.get("goal", "") or item.get("focus", ""),
+                "tasks": item.get("tasks", []),
+                "expected_output": item.get("expected_output", ""),
+                "confirmation_required": bool(item.get("confirmation_required", True)),
+            }
+        )
+    result["weekly_plan"] = normalized_weekly
+
+    normalized_uncertain = []
+    for item in result.get("uncertain_items", []) or []:
+        if not isinstance(item, dict):
+            continue
+        normalized_uncertain.append(
+            {
+                "item": item.get("item", ""),
+                "reason": item.get("reason", ""),
+                "needed_confirmation": item.get("needed_confirmation", "") or item.get("needed_user_input", ""),
+                "source_url": item.get("source_url", "") or item.get("url", ""),
+            }
+        )
+    result["uncertain_items"] = normalized_uncertain
+
+    calendar_write = result.get("calendar_write_request") if isinstance(result.get("calendar_write_request"), dict) else {}
+    calendar_write["requires_user_confirmation"] = True
+    calendar_write["message"] = calendar_write.get("message") or "위 일정 초안을 Google Calendar에 추가할지 사용자 확인이 필요합니다."
+    result["calendar_write_request"] = calendar_write
+    result.setdefault("source_links", [])
+    result.setdefault("confirmation_questions", [])
+    return result
+
+
+def call_planner_agent(planner_input):
+    user_prompt = {
+        "planner_input": planner_input,
+        "instruction": (
+            "Consult Agent가 승인한 gap과 verified_sources만 사용해 calendar_draft, todo_list, weekly_plan을 작성해주세요. "
+            "일정과 URL이 명확하지 않은 외부 기회는 uncertain_items로 보내고, Google Calendar write는 절대 하지 마세요."
+        ),
+    }
+    return call_openai_json(PLANNER_AGENT_PROMPT, user_prompt, max_output_tokens=5000)
+
+
+def call_leading_agent_final(metadata, preferences, consult_result, planner_result=None):
     system_prompt = (
         LEADING_AGENT_PROMPT
         + "\n\n"
@@ -2133,6 +2518,7 @@ def call_leading_agent_final(metadata, preferences, consult_result):
         "metadata": metadata,
         "preferences": preferences,
         "consult_result": consult_result,
+        "planner_result": planner_result or {},
         "output_schema": {
             "final_report": {
                 "target_role": "string",
@@ -2144,6 +2530,10 @@ def call_leading_agent_final(metadata, preferences, consult_result):
                 "agent_feedback_summary": {},
                 "recommended_strategy": ["string"],
                 "next_actions": ["string"],
+                "calendar_draft_summary": "string",
+                "todo_summary": "string",
+                "source_links": [{"title": "string", "url": "string", "used_for": "string"}],
+                "cautions": ["string"],
             },
             "conversation_log": [{"from": "Leading Agent", "to": "Consult Agent", "message": "string"}],
         },
@@ -2151,8 +2541,9 @@ def call_leading_agent_final(metadata, preferences, consult_result):
     return call_openai_json(system_prompt, user_prompt, max_output_tokens=3600)
 
 
-def fallback_leading_agent_final(preferences, consult_result):
+def fallback_leading_agent_final(preferences, consult_result, planner_result=None):
     classification = consult_result.get("final_classification", {})
+    planner_result = planner_result or {}
     return {
         "final_report": {
             "target_role": preferences.get("target_role", "") or "목표 직무",
@@ -2167,6 +2558,13 @@ def fallback_leading_agent_final(preferences, consult_result):
                 "대표 프로젝트 1개를 역할, 산출물, 성과 중심으로 다시 정리해주세요.",
                 "목표 직무 benchmark의 핵심 요구사항과 연결되는 근거만 CV 앞쪽에 배치해주세요.",
             ],
+            "calendar_draft_summary": f"캘린더 초안 {len(planner_result.get('calendar_draft', []))}개가 준비되었습니다. 아직 실제 캘린더에는 등록하지 않았습니다.",
+            "todo_summary": f"Todo {len(planner_result.get('todo_list', []))}개가 준비되었습니다.",
+            "source_links": planner_result.get("source_links", [])[:10],
+            "cautions": [
+                "외부 대회, 시험, 채용 일정은 원문 URL에서 최신 마감일을 확인한 뒤 확정해야 합니다.",
+                "Google Calendar 등록은 사용자 확인 이후에만 진행해야 합니다.",
+            ],
         },
         "conversation_log": [
             {
@@ -2178,13 +2576,212 @@ def fallback_leading_agent_final(preferences, consult_result):
     }
 
 
+def with_lane(message, agent_key=None):
+    cloned = dict(message or {})
+    if agent_key:
+        cloned["lane"] = agent_key
+        cloned["agent_key"] = agent_key
+    return cloned
+
+
+def normalize_lane_result(agent_key, lane_messages, support_review, clone_review):
+    return {
+        "agent_key": agent_key,
+        "agent_name": SUPPORTING_AGENT_CONFIG.get(agent_key, {}).get("name", agent_key),
+        "messages": [with_lane(message, agent_key) for message in normalize_conversation_log(lane_messages)],
+        "support_review": support_review,
+        "consult_clone_review": clone_review,
+        "status": (
+            "approved"
+            if not (clone_review or {}).get("revision_requests")
+            else "reviewed_with_remaining_requests"
+        ),
+    }
+
+
+def process_supporting_consult_lane(item, metadata, preferences, ranked_jobs, plan, cv_text, retrieval_context, supporting_search_result, emit_event=None):
+    agent_key = item["agent_key"]
+    agent_name = item.get("agent_name") or SUPPORTING_AGENT_CONFIG.get(agent_key, {}).get("name", agent_key)
+    consult_clone_name = f"Consult Agent Clone · {agent_name}"
+    scoped_metadata = select_metadata_for_agent(metadata, SUPPORTING_AGENT_CONFIG[agent_key]["metadata_keys"])
+    scoped_gaps = assigned_gaps_for_agent(agent_key, plan.get("gap_analysis", []))
+    scoped_plan = {
+        **plan,
+        "activated_agents": [item],
+        "gap_analysis": scoped_gaps,
+    }
+    scoped_search_results = {agent_key: supporting_search_result}
+    lane_messages = []
+
+    def add_lane_message(message):
+        normalized = normalize_conversation_log([message])
+        if not normalized:
+            return
+        lane_message = with_lane(normalized[0], agent_key)
+        lane_messages.append(lane_message)
+        if emit_event:
+            emit_event("conversation", lane_message)
+
+    add_lane_message(
+        {
+            "from": consult_clone_name,
+            "to": agent_name,
+            "message": (
+                "이 lane에서는 제가 해당 Supporting Agent만 전담해서 검토하겠습니다.\n"
+                f"- 호출 이유: {item.get('reason', '')}\n"
+                f"- metadata scope: {metadata_scope_summary(scoped_metadata)}\n"
+                f"- assigned_gap: {', '.join(summarize_text_items(scoped_gaps, key='gap_name', limit=4)) or '없음'}\n"
+                f"- verified_sources: {len((supporting_search_result or {}).get('verified_sources', []))}개"
+            ),
+        }
+    )
+
+    try:
+        support_review = call_supporting_agent(
+            agent_key,
+            metadata,
+            preferences,
+            plan["benchmark"],
+            cv_text,
+            retrieval_context,
+            scoped_gaps,
+            supporting_search_result,
+        )
+    except Exception as exc:
+        support_review = fallback_supporting_review(agent_key, exc)
+
+    add_lane_message(
+        {
+            "from": agent_name,
+            "to": consult_clone_name,
+            "message": "1차 검토 결과를 전달드립니다.\n" + review_summary(support_review),
+        }
+    )
+    support_message = support_review.get("conversation_message") if isinstance(support_review, dict) else None
+    if isinstance(support_message, dict):
+        support_message = dict(support_message)
+        if support_message.get("to") == "Consult Agent":
+            support_message["to"] = consult_clone_name
+        add_lane_message(support_message)
+
+    try:
+        first_clone_review = call_consult_agent_review(
+            metadata,
+            preferences,
+            ranked_jobs,
+            scoped_plan,
+            {agent_key: support_review},
+            retrieval_context,
+            allow_revisions=True,
+            supporting_search_results=scoped_search_results,
+        )
+    except Exception:
+        first_clone_review = fallback_consult_agent_review(metadata, preferences, scoped_plan, {agent_key: support_review}, allow_revisions=True)
+
+    for message in normalize_conversation_log(first_clone_review.get("conversation_log", [])):
+        if message.get("from") == "Consult Agent":
+            message["from"] = consult_clone_name
+        if message.get("to") == "Consult Agent":
+            message["to"] = consult_clone_name
+        add_lane_message(message)
+
+    revision_requests = [
+        request for request in first_clone_review.get("revision_requests", [])
+        if isinstance(request, dict) and request.get("agent_key") == agent_key
+    ][:1]
+    if revision_requests:
+        request = revision_requests[0]
+        add_lane_message(
+            {
+                "from": consult_clone_name,
+                "to": agent_name,
+                "message": (
+                    clean_text(request.get("message", "결과를 더 구체적으로 재검토해주세요."))
+                    + "\n"
+                    + f"- 재검토 assigned_gap: {', '.join(summarize_text_items(scoped_gaps, key='gap_name', limit=4)) or '없음'}"
+                ),
+            }
+        )
+        try:
+            revised_review = call_supporting_agent_revision(
+                agent_key,
+                metadata,
+                preferences,
+                plan["benchmark"],
+                cv_text,
+                support_review,
+                request,
+                retrieval_context,
+                scoped_gaps,
+                supporting_search_result,
+            )
+            support_review = revised_review
+            add_lane_message(
+                {
+                    "from": agent_name,
+                    "to": consult_clone_name,
+                    "message": "재검토 결과를 전달드립니다.\n" + review_summary(revised_review),
+                }
+            )
+        except Exception as exc:
+            revised_review = fallback_supporting_review(agent_key, exc)
+            revised_review["revision_note"] = "재검토 결과를 구조화하지 못해 보수적으로 gap으로 유지했습니다."
+            support_review = revised_review
+            add_lane_message(
+                {
+                    "from": agent_name,
+                    "to": consult_clone_name,
+                    "message": "재검토 중 문제가 있어 확인 가능한 내용만 보수적으로 다시 전달드립니다.\n" + review_summary(revised_review),
+                }
+            )
+
+    try:
+        clone_final_review = call_consult_agent_review(
+            metadata,
+            preferences,
+            ranked_jobs,
+            scoped_plan,
+            {agent_key: support_review},
+            retrieval_context,
+            allow_revisions=False,
+            prior_review=first_clone_review,
+            supporting_search_results=scoped_search_results,
+        )
+    except Exception:
+        clone_final_review = fallback_consult_agent_review(metadata, preferences, scoped_plan, {agent_key: support_review}, allow_revisions=False)
+
+    for message in normalize_conversation_log(clone_final_review.get("conversation_log", [])):
+        if message.get("from") == "Consult Agent":
+            message["from"] = consult_clone_name
+        if message.get("to") == "Consult Agent":
+            message["to"] = consult_clone_name
+        add_lane_message(message)
+    add_lane_message(
+        {
+            "from": consult_clone_name,
+            "to": "Final Consult Agent",
+            "message": (
+                "이 lane의 검토를 마쳤습니다.\n"
+                f"- priority gaps: {', '.join(summarize_text_items(clone_final_review.get('priority_gaps', []), key='gap', limit=3)) or '없음'}\n"
+                f"- recommendations: {', '.join(summarize_text_items(clone_final_review.get('recommendations', []), key='title', limit=2)) or '없음'}"
+            ),
+        }
+    )
+    lane_result = normalize_lane_result(agent_key, lane_messages, support_review, clone_final_review)
+    lane_result["_emitted_live"] = bool(emit_event)
+    return agent_key, support_review, clone_final_review, lane_result
+
+
 def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
     if not OPENAI_API_KEY:
         return {"error": "OPENAI_API_KEY가 없어 Feedback Loop를 실행하지 못했습니다."}
 
+    emit_lock = Lock()
+
     def emit_event(event, payload):
         if emit:
-            emit(event, payload)
+            with emit_lock:
+                emit(event, payload)
 
     conversation_log = [
         {
@@ -2244,30 +2841,27 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
     )
 
     supporting_reviews = {}
+    consult_clone_reviews = {}
+    lane_conversations = {}
     supporting_search_results = {}
-    emit_event("status", {"message": "선택된 Supporting Agent들이 병렬로 1차 검토를 시작했습니다."})
-    for item in plan["activated_agents"]:
-        scoped_metadata = select_metadata_for_agent(metadata, SUPPORTING_AGENT_CONFIG[item["agent_key"]]["metadata_keys"])
+    active_items = plan.get("activated_agents", [])
+    emit_event("status", {"message": "선택된 Supporting Agent와 Consult Clone들이 lane별 병렬 검토를 시작했습니다."})
+
+    for item in active_items:
         scoped_gaps = assigned_gaps_for_agent(item["agent_key"], plan.get("gap_analysis", []))
         retrieval_results = build_supporting_search_results(item["agent_key"], preferences, scoped_gaps)
         supporting_search_results[item["agent_key"]] = retrieval_results
-        verified_sources = retrieval_results.get("verified_sources", [])
-        discarded_sources = retrieval_results.get("discarded_sources", [])
-        handoff_message = {
-            "from": "Consult Agent",
-            "to": item["agent_name"],
-            "message": (
-                "담당 Agent에게 제한된 입력 범위를 전달합니다.\n"
-                f"- 호출 이유: {item.get('reason', '')}\n"
-                f"- metadata scope: {metadata_scope_summary(scoped_metadata)}\n"
-                f"- assigned_gap: {', '.join(summarize_text_items(scoped_gaps, key='gap_name', limit=4)) or '없음'}\n"
-                f"- benchmark: {', '.join(summarize_text_items(select_benchmark_for_agent(plan['benchmark'], SUPPORTING_AGENT_CONFIG[item['agent_key']]['benchmark_keys']).get('core_requirements', []), limit=3)) or '없음'}\n"
-                f"- verified_sources: {len(verified_sources)}개 ({', '.join(summarize_text_items(verified_sources, key='title', limit=2)) or '검증 통과 source 없음'})\n"
-                f"- discarded_sources: {len(discarded_sources)}개"
-            ),
-        }
-        conversation_log.append(handoff_message)
-        emit_event("conversation", handoff_message)
+        emit_event(
+            "lane_started",
+            {
+                "agentKey": item["agent_key"],
+                "agentName": item.get("agent_name", SUPPORTING_AGENT_CONFIG.get(item["agent_key"], {}).get("name", item["agent_key"])),
+                "consultCloneName": f"Consult Agent Clone · {item.get('agent_name', item['agent_key'])}",
+                "verifiedSourceCount": len(retrieval_results.get("verified_sources", [])),
+                "discardedSourceCount": len(retrieval_results.get("discarded_sources", [])),
+            },
+        )
+
     write_debug_json(
         "supporting_agent_retrieval_audit.json",
         {
@@ -2276,134 +2870,90 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
             "results_by_agent": supporting_search_results,
         },
     )
-    with ThreadPoolExecutor(max_workers=min(4, max(1, len(plan["activated_agents"])))) as executor:
+
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(active_items)))) as executor:
         futures = {
             executor.submit(
-                call_supporting_agent,
-                item["agent_key"],
+                process_supporting_consult_lane,
+                item,
                 metadata,
                 preferences,
-                plan["benchmark"],
+                ranked_jobs,
+                plan,
                 cv_text,
                 retrieval_context,
-                assigned_gaps_for_agent(item["agent_key"], plan.get("gap_analysis", [])),
-                supporting_search_results.get(item["agent_key"], []),
+                supporting_search_results.get(item["agent_key"], {}),
+                emit_event,
             ): item
-            for item in plan["activated_agents"]
+            for item in active_items
         }
         for future in as_completed(futures):
             item = futures[future]
+            agent_key = item["agent_key"]
             try:
-                review = future.result()
+                lane_agent_key, support_review, clone_review, lane_result = future.result()
+                agent_key = lane_agent_key
             except Exception as exc:
-                review = fallback_supporting_review(item["agent_key"], exc)
-            supporting_reviews[item["agent_key"]] = review
-            review_detail_message = {
-                "from": item["agent_name"],
-                "to": "Consult Agent",
+                support_review = fallback_supporting_review(agent_key, exc)
+                scoped_plan = {**plan, "activated_agents": [item], "gap_analysis": assigned_gaps_for_agent(agent_key, plan.get("gap_analysis", []))}
+                clone_review = fallback_consult_agent_review(metadata, preferences, scoped_plan, {agent_key: support_review}, allow_revisions=False)
+                lane_result = normalize_lane_result(
+                    agent_key,
+                    [
+                        {
+                            "from": item.get("agent_name", SUPPORTING_AGENT_CONFIG.get(agent_key, {}).get("name", agent_key)),
+                            "to": f"Consult Agent Clone · {item.get('agent_name', agent_key)}",
+                            "message": "lane 처리 중 문제가 있어 확인 가능한 내용만 보수적으로 전달했습니다.\n" + review_summary(support_review),
+                        }
+                    ],
+                    support_review,
+                    clone_review,
+                )
+
+            supporting_reviews[agent_key] = support_review
+            consult_clone_reviews[agent_key] = clone_review
+            lane_conversations[agent_key] = lane_result
+            for message in lane_result.get("messages", []):
+                conversation_log.append(message)
+                if not lane_result.get("_emitted_live"):
+                    emit_event("conversation", message)
+            emit_event("supporting_review", {"agentKey": agent_key, "review": support_review})
+            emit_event("consult_clone_review", {"agentKey": agent_key, "review": clone_review, "lane": lane_result})
+            emit_event(
+                "status",
+                {
+                    "message": f"{lane_result.get('agent_name', agent_key)} lane의 Consult Clone 검토가 완료되었습니다."
+                },
+            )
+
+    emit_event("status", {"message": "Final Consult Agent가 각 Consult Clone의 결과를 모아 최종 통합하고 있습니다."})
+    first_consult_review = {
+        "agent_reviews": supporting_reviews,
+        "consult_clone_reviews": consult_clone_reviews,
+        "lane_summary": {
+            key: {
+                "status": value.get("status"),
+                "agent_name": value.get("agent_name"),
+                "message_count": len(value.get("messages", [])),
+            }
+            for key, value in lane_conversations.items()
+        },
+        "revision_requests": [],
+        "conversation_log": [
+            {
+                "from": "Consult Agent Clones",
+                "to": "Final Consult Agent",
                 "message": (
-                    "1차 검토 요약을 전달드립니다.\n"
-                    + review_summary(review)
+                    "각 lane의 1:1 검토 결과를 전달합니다.\n"
+                    f"- 완료 lane: {', '.join(SUPPORTING_AGENT_CONFIG.get(key, {}).get('name', key) for key in lane_conversations)}\n"
+                    "Final Consult Agent는 clone 결과를 합쳐 전체 우선순위와 최종 위험 분류만 정리해주세요."
                 ),
             }
-            conversation_log.append(review_detail_message)
-            emit_event("conversation", review_detail_message)
-            message = review.get("conversation_message") if isinstance(review, dict) else None
-            if isinstance(message, dict):
-                normalized_messages = normalize_conversation_log([message])
-                conversation_log.extend(normalized_messages)
-                for normalized_message in normalized_messages:
-                    emit_event("conversation", normalized_message)
-            else:
-                fallback_message = {
-                    "from": item["agent_name"],
-                    "to": "Consult Agent",
-                    "message": "담당 범위의 1차 검토 결과를 전달드립니다. Consult Agent의 검토를 요청드립니다.",
-                }
-                conversation_log.append(fallback_message)
-                emit_event("conversation", fallback_message)
-            emit_event("supporting_review", {"agentKey": item["agent_key"], "review": review})
-
-    emit_event("status", {"message": "Consult Agent가 Supporting Agent들의 1차 결과를 검토하고 있습니다."})
-    consult_review_input_message = {
-        "from": "Supporting Agents",
-        "to": "Consult Agent",
-        "message": (
-            "1차 검토 결과 묶음을 전달했습니다.\n"
-            f"- review 대상: {', '.join(SUPPORTING_AGENT_CONFIG.get(key, {}).get('name', key) for key in supporting_reviews)}\n"
-            f"- gap 기준: {', '.join(summarize_text_items(plan.get('gap_analysis', []), key='gap_name', limit=5)) or '없음'}"
-        ),
+        ],
     }
-    conversation_log.append(consult_review_input_message)
-    emit_event("conversation", consult_review_input_message)
-    try:
-        first_consult_review = call_consult_agent_review(metadata, preferences, ranked_jobs, plan, supporting_reviews, retrieval_context, allow_revisions=True, supporting_search_results=supporting_search_results)
-    except Exception:
-        first_consult_review = fallback_consult_agent_review(metadata, preferences, plan, supporting_reviews, allow_revisions=True)
     conversation_log.extend(normalize_conversation_log(first_consult_review.get("conversation_log", [])))
     for message in normalize_conversation_log(first_consult_review.get("conversation_log", [])):
         emit_event("conversation", message)
-
-    revision_requests = [
-        request for request in first_consult_review.get("revision_requests", [])
-        if isinstance(request, dict) and request.get("agent_key") in supporting_reviews
-    ][:4]
-    if revision_requests:
-        emit_event("status", {"message": "Consult Agent가 일부 Agent에게 재검토를 요청했습니다."})
-        with ThreadPoolExecutor(max_workers=min(4, len(revision_requests))) as executor:
-            futures = {
-                executor.submit(
-                    call_supporting_agent_revision,
-                    request["agent_key"],
-                    metadata,
-                    preferences,
-                    plan["benchmark"],
-                    cv_text,
-                    supporting_reviews.get(request["agent_key"], {}),
-                    request,
-                    retrieval_context,
-                    assigned_gaps_for_agent(request["agent_key"], plan.get("gap_analysis", [])),
-                    supporting_search_results.get(request["agent_key"], []),
-                ): request
-                for request in revision_requests
-            }
-            for future in as_completed(futures):
-                request = futures[future]
-                agent_key = request["agent_key"]
-                conversation_log.append(
-                    {
-                        "from": "Consult Agent",
-                        "to": SUPPORTING_AGENT_CONFIG[agent_key]["name"],
-                        "message": (
-                            clean_text(request.get("message", "결과를 더 구체적으로 재검토해주세요."))
-                            + "\n"
-                            + f"- 재검토 assigned_gap: {', '.join(summarize_text_items(assigned_gaps_for_agent(agent_key, plan.get('gap_analysis', [])), key='gap_name', limit=4)) or '없음'}"
-                        ),
-                    }
-                )
-                emit_event("conversation", conversation_log[-1])
-                try:
-                    revised_review = future.result()
-                    supporting_reviews[agent_key] = revised_review
-                    revised_detail_message = {
-                        "from": SUPPORTING_AGENT_CONFIG[agent_key]["name"],
-                        "to": "Consult Agent",
-                        "message": "재검토 결과 요약을 전달드립니다.\n" + review_summary(revised_review),
-                    }
-                    conversation_log.append(revised_detail_message)
-                    emit_event("conversation", revised_detail_message)
-                    message = revised_review.get("conversation_message") if isinstance(revised_review, dict) else None
-                    if isinstance(message, dict):
-                        normalized_messages = normalize_conversation_log([message])
-                        conversation_log.extend(normalized_messages)
-                        for normalized_message in normalized_messages:
-                            emit_event("conversation", normalized_message)
-                    emit_event("supporting_review", {"agentKey": agent_key, "review": revised_review})
-                except Exception as exc:
-                    revised_review = fallback_supporting_review(agent_key, exc)
-                    revised_review["revision_note"] = "재검토 결과를 구조화하지 못해 보수적으로 gap으로 유지했습니다."
-                    supporting_reviews[agent_key] = revised_review
-                    emit_event("supporting_review", {"agentKey": agent_key, "review": revised_review})
 
     emit_event("status", {"message": "Consult Agent가 최종 통합 결과를 정리하고 있습니다."})
     try:
@@ -2424,6 +2974,47 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
     for message in normalize_conversation_log(consult_review.get("conversation_log", [])):
         emit_event("conversation", message)
     emit_event("consult_result", consult_review)
+
+    planner_input = build_planner_input(metadata, preferences, consult_review, retrieval_context, supporting_search_results)
+    planner_handoff_message = {
+        "from": "Leading Agent",
+        "to": "Planner Agent",
+        "message": (
+            "Consult Agent의 최종 검토 결과를 일정과 todo 초안으로 바꿔주세요.\n"
+            f"- final status: {consult_review.get('final_classification', {}).get('status', '미분류')}\n"
+            f"- priority gaps: {', '.join(summarize_text_items(consult_review.get('priority_gaps', []), key='gap', limit=4)) or '없음'}\n"
+            f"- verified source links: {len(planner_input.get('verified_sources', []))}개\n"
+            "- URL과 날짜 근거가 함께 있는 항목만 캘린더 후보로 올리고, 나머지는 확인 필요로 분리해주세요."
+        ),
+    }
+    conversation_log.append(planner_handoff_message)
+    emit_event("conversation", planner_handoff_message)
+    emit_event("status", {"message": "Planner Agent가 검증된 source를 기준으로 Calendar Draft와 Todo를 만들고 있습니다."})
+    try:
+        planner_result = call_planner_agent(planner_input)
+    except Exception:
+        planner_result = fallback_planner_result(planner_input)
+    planner_result = normalize_planner_result(planner_result)
+    planner_message = planner_result.get("conversation_message") if isinstance(planner_result, dict) else None
+    if isinstance(planner_message, dict):
+        normalized_messages = normalize_conversation_log([planner_message])
+        conversation_log.extend(normalized_messages)
+        for message in normalized_messages:
+            emit_event("conversation", message)
+    else:
+        fallback_planner_message = {
+            "from": "Planner Agent",
+            "to": "Leading Agent",
+            "message": (
+                f"Calendar Draft {len(planner_result.get('calendar_draft', []))}개, "
+                f"Todo {len(planner_result.get('todo_list', []))}개, "
+                f"확인 필요 항목 {len(planner_result.get('uncertain_items', []))}개로 계획 초안을 만들었습니다."
+            ),
+        }
+        conversation_log.append(fallback_planner_message)
+        emit_event("conversation", fallback_planner_message)
+    emit_event("planner_result", planner_result)
+
     emit_event("status", {"message": "Leading Agent가 사용자용 최종 보고서로 정리하고 있습니다."})
     final_handoff_message = {
         "from": "Consult Agent",
@@ -2432,21 +3023,22 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
             "최종 통합 결과를 전달합니다.\n"
             f"- final status: {consult_review.get('final_classification', {}).get('status', '미분류')}\n"
             f"- priority gaps: {', '.join(summarize_text_items(consult_review.get('priority_gaps', []), key='gap', limit=4)) or '없음'}\n"
-            f"- recommendations: {', '.join(summarize_text_items(consult_review.get('recommendations', []), key='title', limit=3)) or '없음'}"
+            f"- recommendations: {', '.join(summarize_text_items(consult_review.get('recommendations', []), key='title', limit=3)) or '없음'}\n"
+            f"- planner draft: calendar {len(planner_result.get('calendar_draft', []))}개 / todo {len(planner_result.get('todo_list', []))}개"
         ),
     }
     conversation_log.append(final_handoff_message)
     emit_event("conversation", final_handoff_message)
     try:
-        leading_final = call_leading_agent_final(metadata, preferences, consult_review)
+        leading_final = call_leading_agent_final(metadata, preferences, consult_review, planner_result)
     except Exception:
-        leading_final = fallback_leading_agent_final(preferences, consult_review)
+        leading_final = fallback_leading_agent_final(preferences, consult_review, planner_result)
     conversation_log.extend(normalize_conversation_log(leading_final.get("conversation_log", [])))
     for message in normalize_conversation_log(leading_final.get("conversation_log", [])):
         emit_event("conversation", message)
 
     return {
-        "mode": "multi_call",
+        "mode": "multi_call_parallel_consult_clones",
         "retrievalPolicy": "consulting_source_registry_quality_gate",
         "retrievedSources": retrieval_context,
         "supportingRetrievalResults": supporting_search_results,
@@ -2454,8 +3046,16 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
         "gapAnalysis": plan.get("gap_analysis", []),
         "activatedAgents": plan.get("activated_agents", []),
         "supportingReviews": supporting_reviews,
+        "consultCloneReviews": consult_clone_reviews,
+        "laneConversations": lane_conversations,
         "firstConsultReview": first_consult_review,
         "consultResult": consult_review,
+        "plannerInput": {
+            "user_constraints": planner_input.get("user_constraints", {}),
+            "verified_source_count": len(planner_input.get("verified_sources", [])),
+            "planning_policy": planner_input.get("planning_policy", {}),
+        },
+        "plannerResult": planner_result,
         "leadingReport": leading_final.get("final_report", {}),
         "conversationLog": conversation_log,
     }
