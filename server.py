@@ -28,6 +28,7 @@ CACHE_TTL_SECONDS = int(os.getenv("JOBS_CACHE_TTL_SECONDS", "600"))
 DEFAULT_JOB_KEYWORD = os.getenv("JOB_SEARCH_KEYWORD", "신입 채용")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
+OPENAI_PDF_MODEL = os.getenv("OPENAI_PDF_MODEL", OPENAI_MODEL)
 FAST_AGENT_MODE = os.getenv("HICAREER_FAST_MODE", "1") != "0"
 SEARCH_CACHE_TTL = int(os.getenv("HICAREER_SEARCH_CACHE_TTL", "900"))
 SEARCH_CACHE = {}
@@ -1269,10 +1270,14 @@ def response_output_text(payload):
     if isinstance(payload.get("output_text"), str):
         return payload["output_text"]
     chunks = []
-    for item in payload.get("output", []):
-        for content in item.get("content", []):
-            if isinstance(content.get("text"), str):
+    for item in payload.get("output", []) or []:
+        if isinstance(item, dict) and isinstance(item.get("text"), str):
+            chunks.append(item["text"])
+        for content in (item.get("content", []) if isinstance(item, dict) else []):
+            if isinstance(content, dict) and isinstance(content.get("text"), str):
                 chunks.append(content["text"])
+            elif isinstance(content, str):
+                chunks.append(content)
     return "\n".join(chunks)
 
 
@@ -1407,7 +1412,7 @@ SUPPORTING_AGENT_CONFIG = {
         "benchmark_keys": ["core_requirements", "minimum_viable_profile", "strong_profile_signals", "common_rejection_risks"],
         "role": (
             "너는 Project & Career Experience Agent입니다. 프로젝트, 대외활동, 인턴, 연구, 공모전, 실무 경험을 "
-            "Consult Agent가 제공한 benchmark 기준으로 검토해주세요."
+            "Leading Agent가 제공한 benchmark 기준으로 검토해주세요."
         ),
         "task": (
             "활동명, 기간, 기관, 본인 역할, 수행 내용, 성과가 명확한지 확인하고, 목표 직무 기준에서 충족되는 점과 "
@@ -1437,7 +1442,29 @@ SUPPORTING_AGENT_CONFIG = {
             "최소 검증 신호로 충분한지 검토해주세요."
         ),
         "task": (
-            "명시된 어학/자격증/교육/기술만 사용하고, 자격증보다 프로젝트가 중요한 직무라면 그 점도 Consult Agent에게 알려주세요."
+            "명시된 어학/자격증/교육/기술만 사용하고, 자격증보다 프로젝트가 중요한 직무라면 그 점도 Leading Agent에게 알려주세요."
+        ),
+    },
+    "cv_positioning": {
+        "name": "CV Positioning & Expression Agent",
+        "prompt_file": "cv_positioning.md",
+        "metadata_keys": [
+            "education",
+            "projects_and_experience",
+            "awards",
+            "leadership_and_volunteering",
+            "languages_and_certificates",
+            "skills",
+            "other",
+        ],
+        "benchmark_keys": ["core_requirements", "preferred_requirements", "strong_profile_signals", "common_rejection_risks"],
+        "role": (
+            "너는 CV Positioning & Expression Agent입니다. CV 전체 구조, 직무 포지셔닝, 성과 표현, ATS 친화성, "
+            "지원 직무에 맞는 메시지 우선순위를 검토해주세요."
+        ),
+        "task": (
+            "새로운 스펙을 만들라는 조언보다, 이미 있는 근거를 어떤 직무 방향으로 묶고 어떤 순서와 표현으로 보여줄지 제안해주세요. "
+            "없는 성과를 만들거나 공고 키워드를 억지로 삽입하지 마세요."
         ),
     },
 }
@@ -1455,7 +1482,7 @@ JSON_REPAIR_PROMPT = load_agent_prompt("json_repair.md")
 PLANNER_AGENT_PROMPT = load_agent_prompt("planner_agent.md")
 
 
-def repair_openai_json(raw_text, expected_schema, context_label="agent output"):
+def repair_openai_json(raw_text, expected_schema, context_label="agent output", model=None):
     system_prompt = JSON_REPAIR_PROMPT
     user_prompt = {
         "context_label": context_label,
@@ -1467,15 +1494,15 @@ def repair_openai_json(raw_text, expected_schema, context_label="agent output"):
             "Return one JSON object only.",
         ],
     }
-    return call_openai_json(system_prompt, user_prompt, max_output_tokens=3000, timeout=30, allow_repair=False)
+    return call_openai_json(system_prompt, user_prompt, max_output_tokens=3000, timeout=30, allow_repair=False, model=model)
 
 
-def call_openai_json(system_prompt, user_prompt, max_output_tokens=1800, timeout=40, allow_repair=True):
+def call_openai_json(system_prompt, user_prompt, max_output_tokens=1800, timeout=40, allow_repair=True, model=None):
     if not OPENAI_API_KEY:
         raise ValueError("OPENAI_API_KEY가 필요합니다.")
 
     request_payload = {
-            "model": OPENAI_MODEL,
+            "model": model or OPENAI_MODEL,
             "input": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(user_prompt, ensure_ascii=False)},
@@ -1839,7 +1866,7 @@ def call_supporting_agent(agent_key, metadata, preferences, benchmark, cv_text, 
         + agent_prompt
     )
     user_prompt = {
-        "instruction_from_consult_agent": config["task"],
+        "instruction_from_leading_agent": config["task"],
         "target_role": preferences.get("target_role", ""),
         "preparation_period": preferences.get("preparation_period", ""),
         "additional_user_input": preferences.get("additional_user_input", ""),
@@ -1878,7 +1905,7 @@ def call_supporting_agent(agent_key, metadata, preferences, benchmark, cv_text, 
             },
             "conversation_message": {
                 "from": config["name"],
-                "to": "Consult Agent",
+                "to": "Leading Agent",
                 "message": "string",
             },
         },
@@ -1976,7 +2003,7 @@ def call_supporting_agent_revision(agent_key, metadata, preferences, benchmark, 
             },
             "conversation_message": {
                 "from": config["name"],
-                "to": "Consult Agent",
+                "to": "Leading Agent",
                 "message": "string",
             },
         },
@@ -2782,6 +2809,282 @@ def process_supporting_consult_lane(item, metadata, preferences, ranked_jobs, pl
     return agent_key, support_review, clone_final_review, lane_result
 
 
+def build_direct_agent_plan(metadata, preferences, ranked_jobs, retrieval_context):
+    target_role = preferences.get("target_role", "") or DEFAULT_JOB_KEYWORD
+    requirements = common_job_requirements(ranked_jobs)
+    if not requirements:
+        requirements = extract_profile_skills(metadata_to_text(metadata))[:8] or ["직무 관련 경험", "본인 역할", "산출물", "정량 성과"]
+    benchmark = {
+        "target_role": target_role,
+        "source_count": len(retrieval_context.get("benchmark_sources", [])),
+        "benchmark_sources": retrieval_context.get("benchmark_sources", [])[:10],
+        "core_requirements": requirements[:8],
+        "preferred_requirements": requirements[8:14],
+        "minimum_viable_profile": [
+            "목표 직무와 직접 연결되는 프로젝트/연구/실무 경험이 구조화되어 있어야 합니다.",
+            "본인 역할, 사용 기술, 산출물, 결과 지표가 분리되어 보여야 합니다.",
+        ],
+        "strong_profile_signals": [
+            "논문, 수상, 인턴, 오픈소스, 대회처럼 외부 검증 근거가 있는 경험",
+            "재현 가능한 코드, README, benchmark, demo, 발표자료처럼 확인 가능한 산출물",
+        ],
+        "common_rejection_risks": [
+            "경험은 많지만 목표 직무 요구사항과 연결되는 증거가 흐릿한 경우",
+            "기술 스택, 평가 지표, 개인 기여도, 결과 수치가 빠진 경우",
+            "어학/자격/교육 항목이 요구 직무 대비 검증 신호로 충분하지 않은 경우",
+        ],
+    }
+    gap_templates = {
+        "project_and_career": {
+            "gap_name": "활동·수상·프로젝트 evidence 정렬",
+            "missing_or_weak_point": "프로젝트, 연구, 인턴, 공모전, 수상 경험이 목표 공고의 핵심 요구와 어떻게 연결되는지 검토해야 합니다.",
+            "source_categories": ["job_posting", "internship", "competition", "external_activity"],
+        },
+        "leadership_and_contribution": {
+            "gap_name": "리더십·봉사·협업 evidence 정렬",
+            "missing_or_weak_point": "팀 운영, 리더십, 봉사, 멘토링, 커뮤니티 기여가 직무의 협업/책임감 신호로 충분한지 검토해야 합니다.",
+            "source_categories": ["external_activity", "volunteering", "mentoring", "team_or_community_roles"],
+        },
+        "language_and_credential": {
+            "gap_name": "어학·자격·기술 검증 evidence 정렬",
+            "missing_or_weak_point": "어학 성적, 자격증, 수료증, 교육, 툴 역량이 최소 검증 신호로 충분한지 검토해야 합니다.",
+            "source_categories": ["certificate", "language_test", "training", "job_posting"],
+        },
+        "cv_positioning": {
+            "gap_name": "CV 포지셔닝·표현 정렬",
+            "missing_or_weak_point": "이미 있는 강점이 목표 직무 기준으로 앞쪽에 배치되고, 역할·행동·성과 중심 문장으로 보이는지 검토해야 합니다.",
+            "source_categories": ["job_posting", "portfolio", "resume_sample", "success_case"],
+        },
+    }
+    gap_analysis = []
+    activated_agents = []
+    for agent_key, config in SUPPORTING_AGENT_CONFIG.items():
+        template = gap_templates.get(agent_key, {})
+        gap_analysis.append(
+            {
+                "gap_name": template.get("gap_name", config["name"]),
+                "related_benchmark_requirement": requirements[0] if requirements else target_role,
+                "metadata_evidence": metadata_scope_summary(select_metadata_for_agent(metadata, config["metadata_keys"])),
+                "missing_or_weak_point": template.get("missing_or_weak_point", config["task"]),
+                "recommended_source_policy": "상위 공고와 외부 기회 source를 근거로 준비 기간 내 보완 가능한 action만 제안합니다.",
+                "source_categories": template.get("source_categories", []),
+                "assigned_agent": agent_key,
+            }
+        )
+        activated_agents.append(
+            {
+                "agent_key": agent_key,
+                "agent_name": config["name"],
+                "reason": template.get("missing_or_weak_point", config["task"]),
+            }
+        )
+    return {
+        "benchmark": benchmark,
+        "gap_analysis": gap_analysis,
+        "retrieved_sources": retrieval_context,
+        "retrieval_source_registry": load_retrieval_source_registry(),
+        "activated_agents": activated_agents,
+        "conversation_log": [],
+    }
+
+
+def normalize_supporting_conversation_message(agent_key, review):
+    config = SUPPORTING_AGENT_CONFIG.get(agent_key, {})
+    message = review.get("conversation_message", {}) if isinstance(review, dict) else {}
+    text = clean_text(message.get("message", "")) or review_summary(review)
+    return {
+        "from": review.get("agent_name") or config.get("name", agent_key),
+        "to": "Leading Agent",
+        "message": text.replace("Consult Agent", "Leading Agent"),
+    }
+
+
+def review_stance(review):
+    assessment = review.get("assessment", {}) if isinstance(review, dict) else {}
+    fulfilled = assessment.get("fulfilled_requirements", []) or []
+    weak = assessment.get("missing_or_weak_requirements", []) or []
+    if weak and len(weak) > len(fulfilled):
+        return "보완 필요", weak[0]
+    if weak:
+        return "조건부 충분", weak[0]
+    return "충분", fulfilled[0] if fulfilled else "확인된 강점이 있습니다."
+
+
+def build_supporting_agent_debate(supporting_reviews):
+    ordered_keys = [key for key in SUPPORTING_AGENT_CONFIG if key in (supporting_reviews or {})]
+    if not ordered_keys:
+        return []
+    debate = []
+    stances = {}
+    for key in ordered_keys:
+        review = supporting_reviews.get(key, {})
+        agent_name = review.get("agent_name") or SUPPORTING_AGENT_CONFIG.get(key, {}).get("name", key)
+        stance, reason = review_stance(review)
+        stances[key] = {"agent_name": agent_name, "stance": stance, "reason": clean_text(reason)}
+
+    for index, key in enumerate(ordered_keys):
+        current = stances[key]
+        next_key = ordered_keys[(index + 1) % len(ordered_keys)]
+        peer = stances[next_key]
+        if current["stance"] == "충분":
+            message = f"제 영역은 현재 충분에 가깝습니다. 근거는 `{current['reason']}`입니다. 다만 {peer['agent_name']}가 지적한 `{peer['reason']}`가 최종 안정성을 좌우할 수 있습니다."
+        elif current["stance"] == "조건부 충분":
+            message = f"제 영역은 조건부 충분입니다. `{current['reason']}`만 보강되면 현재 강점을 유지할 수 있습니다. {peer['agent_name']}의 관점과 함께 우선순위를 정해야 합니다."
+        else:
+            message = f"제 영역은 아직 보완 필요입니다. 핵심 이유는 `{current['reason']}`입니다. 다른 영역이 강해도 이 근거가 약하면 최종 지원 안정성이 내려갑니다."
+        debate.append({"from": current["agent_name"], "to": peer["agent_name"], "message": message})
+
+    insufficient = [item for item in stances.values() if item["stance"] != "충분"]
+    if insufficient:
+        summary = "; ".join(f"{item['agent_name']}: {item['stance']}" for item in insufficient[:4])
+        debate.append({"from": "Supporting Agents", "to": "Leading Agent", "message": f"짧은 debate 결론입니다. 완전 충분보다는 보완 후 지원 쪽입니다. {summary}"})
+    else:
+        debate.append({"from": "Supporting Agents", "to": "Leading Agent", "message": "짧은 debate 결론입니다. 4개 영역 모두 충분에 가까우며, 최종 리포트에서는 강점 유지와 포지셔닝 정리를 우선하면 됩니다."})
+    return debate[:6]
+
+
+def aggregate_supporting_reviews_for_leading(preferences, plan, supporting_reviews, ranked_jobs, retrieval_context, supporting_search_results, supporting_debate=None):
+    priority_gaps = []
+    recommendations = []
+    focus = []
+    source_links = []
+    fulfilled_total = 0
+    weak_total = 0
+    for agent_key, review in (supporting_reviews or {}).items():
+        agent_name = review.get("agent_name") or SUPPORTING_AGENT_CONFIG.get(agent_key, {}).get("name", agent_key)
+        assessment = review.get("assessment", {}) if isinstance(review, dict) else {}
+        fulfilled = assessment.get("fulfilled_requirements", []) or []
+        weak = assessment.get("missing_or_weak_requirements", []) or []
+        fulfilled_total += len(fulfilled)
+        weak_total += len(weak)
+        for item in weak[:4]:
+            priority_gaps.append(
+                {
+                    "gap": clean_text(item),
+                    "assigned_agent": agent_name,
+                    "severity": "medium" if fulfilled else "high",
+                    "evidence": "Supporting Agent review + retrieved source bundle",
+                }
+            )
+        for rec in review.get("recommendations", [])[:4]:
+            if not isinstance(rec, dict):
+                continue
+            title = clean_text(rec.get("recommended_action") or rec.get("gap") or "보완 action")
+            reason = clean_text(rec.get("reason", ""))
+            recommendations.append(
+                {
+                    "title": title,
+                    "why": reason,
+                    "assigned_agent": agent_name,
+                    "time_fit": clean_text(rec.get("time_fit", "")),
+                    "source_urls": (review.get("source_usage", {}) or {}).get("used_source_urls", [])[:3],
+                }
+            )
+            if title:
+                focus.append(title)
+        for source in (supporting_search_results.get(agent_key, {}) or {}).get("verified_sources", [])[:5]:
+            if isinstance(source, dict) and source.get("url"):
+                source_links.append({"title": source.get("title", "source"), "url": source.get("url"), "used_for": agent_name})
+    for job in ranked_jobs[:5]:
+        if job.get("url"):
+            source_links.append({"title": job.get("title", "채용공고"), "url": job.get("url"), "used_for": "추천 채용공고 benchmark"})
+    if weak_total == 0 and fulfilled_total >= 5:
+        status = "stable"
+        label = "강점 유지"
+    elif weak_total <= fulfilled_total:
+        status = "moderate_risk"
+        label = "보완 후 지원 권장"
+    else:
+        status = "high_risk"
+        label = "핵심 evidence 보완 필요"
+    return {
+        "final_classification": {
+            "status": status,
+            "label": label,
+            "reason": "Leading Agent가 Supporting Agent 4개의 검토와 짧은 cross-debate, 상위 채용공고 benchmark를 직접 통합했습니다.",
+        },
+        "priority_gaps": priority_gaps[:8],
+        "recommendations": recommendations[:10],
+        "recommended_focus": focus[:8],
+        "agent_reviews": supporting_reviews,
+        "source_links": source_links[:12],
+        "conversation_log": [
+            {
+                "from": "Supporting Agents",
+                "to": "Leading Agent",
+                "message": f"3개 전문 Agent 검토를 전달했습니다. priority gap {len(priority_gaps[:8])}개, action 후보 {len(recommendations[:10])}개입니다.",
+            }
+        ],
+    }
+
+
+def call_leading_agent_direct_final(metadata, preferences, ranked_jobs, retrieval_context, plan, supporting_reviews, aggregate_result, planner_result=None):
+    system_prompt = (
+        "너는 HICAREER의 Leading Agent입니다. Supporting Agent 검토를 직접 통합해 최종 판단을 내립니다. "
+        "지원자 metadata 원문, 목표 직무, 상위 채용공고 benchmark, Supporting Agent 3개의 검토를 종합해 사용자에게 보여줄 리포트를 작성하세요. "
+        "일반론을 피하고, 확인된 metadata와 retrieved source 안에서만 말하세요. "
+        "문장은 한국어로, 상용 서비스의 커리어 컨설턴트처럼 간결하고 구체적으로 작성하세요. Return JSON only."
+    )
+    user_prompt = {
+        "metadata": metadata,
+        "preferences": preferences,
+        "ranked_job_candidates": job_context_for_feedback(ranked_jobs),
+        "retrieval_context": retrieval_context,
+        "benchmark": plan.get("benchmark", {}),
+        "supporting_reviews": supporting_reviews,
+        "aggregate_result": aggregate_result,
+        "supporting_debate": aggregate_result.get("supporting_debate", []),
+        "planner_result": planner_result or {},
+        "rules": [
+            "critical_gaps는 CV 문장 수정이 아니라 실제로 더 쌓거나 증명해야 할 evidence 중심으로 작성하세요.",
+            "key_strengths는 이미 CV에서 확인되는 외부 검증 근거만 사용하세요.",
+            "next_actions는 준비 기간 안에 가능한 순서로 작성하세요.",
+            "source_links에는 제공된 URL만 사용하세요.",
+        ],
+        "output_schema": {
+            "final_report": {
+                "target_role": "string",
+                "preparation_period": "string",
+                "overall_status": "stable | moderate_risk | high_risk",
+                "summary": "string",
+                "key_strengths": ["string"],
+                "critical_gaps": ["string"],
+                "agent_feedback_summary": {},
+                "recommended_strategy": ["string"],
+                "next_actions": ["string"],
+                "calendar_draft_summary": "string",
+                "todo_summary": "string",
+                "source_links": [{"title": "string", "url": "string", "used_for": "string"}],
+                "cautions": ["string"],
+            },
+            "conversation_log": [{"from": "Leading Agent", "to": "User", "message": "string"}],
+        },
+    }
+    return call_openai_json(system_prompt, user_prompt, max_output_tokens=2200, timeout=24)
+
+
+def fallback_leading_agent_direct_final(preferences, aggregate_result, planner_result=None):
+    planner_result = planner_result or {}
+    return {
+        "final_report": {
+            "target_role": preferences.get("target_role", "") or "목표 직무",
+            "preparation_period": preferences.get("preparation_period", ""),
+            "overall_status": (aggregate_result.get("final_classification", {}) or {}).get("status", "moderate_risk"),
+            "summary": "Leading Agent가 Supporting Agent 검토를 기준으로 확인 가능한 강점과 보완할 evidence를 정리했습니다.",
+            "key_strengths": [],
+            "critical_gaps": summarize_text_items(aggregate_result.get("priority_gaps", []), key="gap", limit=5),
+            "agent_feedback_summary": {},
+            "recommended_strategy": aggregate_result.get("recommended_focus", [])[:5],
+            "next_actions": summarize_text_items(aggregate_result.get("recommendations", []), key="title", limit=6),
+            "calendar_draft_summary": f"캘린더 초안 {len(planner_result.get('calendar_draft', []))}개가 준비되었습니다.",
+            "todo_summary": f"Todo {len(planner_result.get('todo_list', []))}개가 준비되었습니다.",
+            "source_links": aggregate_result.get("source_links", [])[:10],
+            "cautions": ["외부 일정과 마감일은 원문 URL에서 한 번 더 확인해야 합니다."],
+        },
+        "conversation_log": [{"from": "Leading Agent", "to": "User", "message": "Supporting Agent 결과를 사용자용 리포트로 정리했습니다."}],
+    }
+
+
 def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
     if not OPENAI_API_KEY:
         return {"error": "OPENAI_API_KEY가 없어 Feedback Loop를 실행하지 못했습니다."}
@@ -2793,80 +3096,52 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
             with emit_lock:
                 emit(event, payload)
 
-    conversation_log = [
-        {
-            "from": "Leading Agent",
-            "to": "Consult Agent",
-            "message": "사용자의 metadata와 선호 정보를 전달드립니다. 목표 직무 기준으로 benchmark를 만들고, 필요한 Supporting Agent를 보수적으로 선택해주세요.",
-        }
-    ]
-    emit_event("conversation", conversation_log[-1])
-    emit_event("status", {"message": "Consult Agent가 benchmark와 호출할 Supporting Agent를 정하고 있습니다."})
+    conversation_log = []
+    emit_event("status", {"message": "Leading Agent가 이력서와 목표 직무 benchmark를 읽고 있습니다."})
     retrieval_context = build_retrieval_context(ranked_jobs, preferences.get("target_role", ""))
-    retrieval_message = {
-        "from": "Consult Agent",
-        "to": "Retrieval Context",
-        "message": (
-            "공개 공고 후보를 benchmark source 형식으로 정리했습니다.\n"
-            f"- 기준 직무: {preferences.get('target_role', '') or '미지정'}\n"
-            f"- benchmark_sources: {len(retrieval_context.get('benchmark_sources', []))}개\n"
-            f"- success_case_sources: {len(retrieval_context.get('success_case_sources', []))}개\n"
-            f"- debug 저장: {retrieval_context.get('debug_success_cases_path', '없음')}\n"
-            f"- 상위 source: {', '.join(summarize_text_items(retrieval_context.get('benchmark_sources', []), key='title', limit=3)) or '없음'}"
-        ),
-    }
-    conversation_log.append(retrieval_message)
-    emit_event("conversation", retrieval_message)
-    try:
-        plan = call_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_context)
-    except Exception:
-        plan = fallback_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_context)
-    retrieval_context = plan.get("retrieved_sources") or retrieval_context
+    plan = build_direct_agent_plan(metadata, preferences, ranked_jobs, retrieval_context)
     benchmark = plan.get("benchmark", {})
     gap_analysis = plan.get("gap_analysis", [])
-    plan_message = {
-        "from": "Consult Agent",
-        "to": "Leading Agent",
+    active_items = plan.get("activated_agents", [])
+
+    opening_message = {
+        "from": "Leading Agent",
+        "to": "Supporting Agents",
         "message": (
-            "benchmark와 gap 분석을 만들었습니다.\n"
-            f"- core requirements: {', '.join(summarize_text_items(benchmark.get('core_requirements', []), limit=4)) or '없음'}\n"
-            f"- minimum profile: {', '.join(summarize_text_items(benchmark.get('minimum_viable_profile', []), limit=3)) or '없음'}\n"
-            f"- gap: {', '.join(summarize_text_items(gap_analysis, key='gap_name', limit=5)) or '없음'}\n"
-            f"- retrieved sources: {retrieval_counts(retrieval_context)}"
+            "목표 직무 benchmark와 전문 Agent 검토 범위를 정했습니다.\n"
+            f"- 기준 직무: {preferences.get('target_role', '') or '미지정'}\n"
+            f"- 비교 공고: {len(retrieval_context.get('benchmark_sources', []))}개\n"
+            f"- 호출 Agent: {', '.join(item.get('agent_name', item.get('agent_key', '')) for item in active_items)}"
         ),
     }
-    conversation_log.append(plan_message)
-    emit_event("conversation", plan_message)
-    conversation_log.extend(plan.get("conversation_log", []))
-    for message in plan.get("conversation_log", []):
-        emit_event("conversation", message)
+    conversation_log.append(opening_message)
+    emit_event("conversation", opening_message)
     emit_event(
         "agents_selected",
         {
-            "activatedAgents": plan.get("activated_agents", []),
-            "benchmark": plan.get("benchmark", {}),
-            "gapAnalysis": plan.get("gap_analysis", []),
+            "activatedAgents": active_items,
+            "benchmark": benchmark,
+            "gapAnalysis": gap_analysis,
             "retrievedSources": retrieval_context,
         },
     )
 
     supporting_reviews = {}
-    consult_clone_reviews = {}
-    lane_conversations = {}
     supporting_search_results = {}
-    active_items = plan.get("activated_agents", [])
-    emit_event("status", {"message": "선택된 Supporting Agent와 Consult Clone들이 lane별 병렬 검토를 시작했습니다."})
+    lane_conversations = {}
+    emit_event("status", {"message": "4개 Supporting Agent가 병렬로 evidence를 검토하고 있습니다."})
 
     for item in active_items:
-        scoped_gaps = assigned_gaps_for_agent(item["agent_key"], plan.get("gap_analysis", []))
-        retrieval_results = build_supporting_search_results(item["agent_key"], preferences, scoped_gaps)
-        supporting_search_results[item["agent_key"]] = retrieval_results
+        agent_key = item["agent_key"]
+        scoped_gaps = assigned_gaps_for_agent(agent_key, gap_analysis)
+        retrieval_results = build_supporting_search_results(agent_key, preferences, scoped_gaps)
+        supporting_search_results[agent_key] = retrieval_results
         emit_event(
             "lane_started",
             {
-                "agentKey": item["agent_key"],
-                "agentName": item.get("agent_name", SUPPORTING_AGENT_CONFIG.get(item["agent_key"], {}).get("name", item["agent_key"])),
-                "consultCloneName": f"Consult Agent Clone · {item.get('agent_name', item['agent_key'])}",
+                "agentKey": agent_key,
+                "agentName": item.get("agent_name", SUPPORTING_AGENT_CONFIG.get(agent_key, {}).get("name", agent_key)),
+                "consultCloneName": "Leading Agent",
                 "verifiedSourceCount": len(retrieval_results.get("verified_sources", [])),
                 "discardedSourceCount": len(retrieval_results.get("discarded_sources", [])),
             },
@@ -2877,199 +3152,101 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
         {
             "target_role": preferences.get("target_role", ""),
             "retrieved_at": time.strftime("%Y-%m-%d"),
+            "mode": "direct_leading_supporting_luna",
             "results_by_agent": supporting_search_results,
         },
     )
 
     with ThreadPoolExecutor(max_workers=min(4, max(1, len(active_items)))) as executor:
-        futures = {
-            executor.submit(
-                process_supporting_consult_lane,
-                item,
-                metadata,
-                preferences,
-                ranked_jobs,
-                plan,
-                cv_text,
-                retrieval_context,
-                supporting_search_results.get(item["agent_key"], {}),
-                emit_event,
-            ): item
-            for item in active_items
-        }
+        futures = {}
+        for item in active_items:
+            agent_key = item["agent_key"]
+            futures[
+                executor.submit(
+                    call_supporting_agent,
+                    agent_key,
+                    metadata,
+                    preferences,
+                    benchmark,
+                    cv_text,
+                    retrieval_context,
+                    assigned_gaps_for_agent(agent_key, gap_analysis),
+                    supporting_search_results.get(agent_key, {}),
+                )
+            ] = item
         for future in as_completed(futures):
             item = futures[future]
             agent_key = item["agent_key"]
             try:
-                lane_agent_key, support_review, clone_review, lane_result = future.result()
-                agent_key = lane_agent_key
+                support_review = future.result()
             except Exception as exc:
                 support_review = fallback_supporting_review(agent_key, exc)
-                scoped_plan = {**plan, "activated_agents": [item], "gap_analysis": assigned_gaps_for_agent(agent_key, plan.get("gap_analysis", []))}
-                clone_review = fallback_consult_agent_review(metadata, preferences, scoped_plan, {agent_key: support_review}, allow_revisions=False)
-                lane_result = normalize_lane_result(
-                    agent_key,
-                    [
-                        {
-                            "from": item.get("agent_name", SUPPORTING_AGENT_CONFIG.get(agent_key, {}).get("name", agent_key)),
-                            "to": f"Consult Agent Clone · {item.get('agent_name', agent_key)}",
-                            "message": "lane 처리 중 문제가 있어 확인 가능한 내용만 보수적으로 전달했습니다.\n" + review_summary(support_review),
-                        }
-                    ],
-                    support_review,
-                    clone_review,
-                )
-
             supporting_reviews[agent_key] = support_review
-            consult_clone_reviews[agent_key] = clone_review
+            message = normalize_supporting_conversation_message(agent_key, support_review)
+            lane_result = normalize_lane_result(agent_key, [with_lane(message, agent_key)], support_review, {})
             lane_conversations[agent_key] = lane_result
-            for message in lane_result.get("messages", []):
-                conversation_log.append(message)
-                if not lane_result.get("_emitted_live"):
-                    emit_event("conversation", message)
+            conversation_log.append(with_lane(message, agent_key))
+            emit_event("conversation", with_lane(message, agent_key))
             emit_event("supporting_review", {"agentKey": agent_key, "review": support_review})
-            emit_event("consult_clone_review", {"agentKey": agent_key, "review": clone_review, "lane": lane_result})
-            emit_event(
-                "status",
-                {
-                    "message": f"{lane_result.get('agent_name', agent_key)} lane의 Consult Clone 검토가 완료되었습니다."
-                },
-            )
+            emit_event("status", {"message": f"{support_review.get('agent_name', item.get('agent_name', agent_key))} 검토가 완료되었습니다."})
 
-    emit_event("status", {"message": "Final Consult Agent가 각 Consult Clone의 결과를 모아 최종 통합하고 있습니다."})
-    first_consult_review = {
-        "agent_reviews": supporting_reviews,
-        "consult_clone_reviews": consult_clone_reviews,
-        "lane_summary": {
-            key: {
-                "status": value.get("status"),
-                "agent_name": value.get("agent_name"),
-                "message_count": len(value.get("messages", [])),
-            }
-            for key, value in lane_conversations.items()
-        },
-        "revision_requests": [],
-        "conversation_log": [
-            {
-                "from": "Consult Agent Clones",
-                "to": "Final Consult Agent",
-                "message": (
-                    "각 lane의 1:1 검토 결과를 전달합니다.\n"
-                    f"- 완료 lane: {', '.join(SUPPORTING_AGENT_CONFIG.get(key, {}).get('name', key) for key in lane_conversations)}\n"
-                    + ("Fast Mode에서는 별도 Final Consult LLM 호출 없이 Supporting Agent 결과를 바로 통합합니다." if FAST_AGENT_MODE else "Final Consult Agent는 clone 결과를 합쳐 전체 우선순위와 최종 위험 분류만 정리해주세요.")
-                ),
-            }
-        ],
-    }
-    conversation_log.extend(normalize_conversation_log(first_consult_review.get("conversation_log", [])))
-    for message in normalize_conversation_log(first_consult_review.get("conversation_log", [])):
+    emit_event("status", {"message": "4개 Supporting Agent가 충분/보완 여부를 짧게 debate하고 있습니다."})
+    supporting_debate = build_supporting_agent_debate(supporting_reviews)
+    for message in normalize_conversation_log(supporting_debate):
+        conversation_log.append(message)
         emit_event("conversation", message)
 
-    if FAST_AGENT_MODE:
-        emit_event("status", {"message": "Fast Mode가 Supporting Agent 결과를 바로 통합하고 있습니다."})
-        consult_review = fallback_consult_agent_review(metadata, preferences, plan, supporting_reviews, allow_revisions=False)
-    else:
-        emit_event("status", {"message": "Consult Agent가 최종 통합 결과를 정리하고 있습니다."})
-        try:
-            consult_review = call_consult_agent_review(
-                metadata,
-                preferences,
-                ranked_jobs,
-                plan,
-                supporting_reviews,
-                retrieval_context,
-                allow_revisions=False,
-                prior_review=first_consult_review,
-                supporting_search_results=supporting_search_results,
-            )
-        except Exception:
-            consult_review = fallback_consult_agent_review(metadata, preferences, plan, supporting_reviews, allow_revisions=False)
-    conversation_log.extend(normalize_conversation_log(consult_review.get("conversation_log", [])))
-    for message in normalize_conversation_log(consult_review.get("conversation_log", [])):
+    emit_event("status", {"message": "Leading Agent가 4개 Agent 결과를 통합하고 있습니다."})
+    aggregate_result = aggregate_supporting_reviews_for_leading(
+        preferences,
+        plan,
+        supporting_reviews,
+        ranked_jobs,
+        retrieval_context,
+        supporting_search_results,
+        supporting_debate,
+    )
+    for message in normalize_conversation_log(aggregate_result.get("conversation_log", [])):
+        conversation_log.append(message)
         emit_event("conversation", message)
-    emit_event("consult_result", consult_review)
+    emit_event("consult_result", aggregate_result)
 
-    planner_input = build_planner_input(metadata, preferences, consult_review, retrieval_context, supporting_search_results)
-    planner_handoff_message = {
-        "from": "Leading Agent",
-        "to": "Planner Agent",
-        "message": (
-            "Consult Agent의 최종 검토 결과를 일정과 todo 초안으로 바꿔주세요.\n"
-            f"- final status: {consult_review.get('final_classification', {}).get('status', '미분류')}\n"
-            f"- priority gaps: {', '.join(summarize_text_items(consult_review.get('priority_gaps', []), key='gap', limit=4)) or '없음'}\n"
-            f"- verified source links: {len(planner_input.get('verified_sources', []))}개\n"
-            "- URL과 날짜 근거가 함께 있는 항목만 캘린더 후보로 올리고, 나머지는 확인 필요로 분리해주세요."
-        ),
-    }
-    conversation_log.append(planner_handoff_message)
-    emit_event("conversation", planner_handoff_message)
-    emit_event("status", {"message": "Planner Agent가 검증된 source를 기준으로 Calendar Draft와 Todo를 만들고 있습니다."})
-    if FAST_AGENT_MODE:
-        planner_result = fallback_planner_result(planner_input)
-    else:
-        try:
-            planner_result = call_planner_agent(planner_input)
-        except Exception:
-            planner_result = fallback_planner_result(planner_input)
-    planner_result = normalize_planner_result(planner_result)
-    planner_message = planner_result.get("conversation_message") if isinstance(planner_result, dict) else None
-    if isinstance(planner_message, dict):
-        normalized_messages = normalize_conversation_log([planner_message])
-        conversation_log.extend(normalized_messages)
-        for message in normalized_messages:
-            emit_event("conversation", message)
-    else:
-        fallback_planner_message = {
-            "from": "Planner Agent",
-            "to": "Leading Agent",
-            "message": (
-                f"Calendar Draft {len(planner_result.get('calendar_draft', []))}개, "
-                f"Todo {len(planner_result.get('todo_list', []))}개, "
-                f"확인 필요 항목 {len(planner_result.get('uncertain_items', []))}개로 계획 초안을 만들었습니다."
-            ),
-        }
-        conversation_log.append(fallback_planner_message)
-        emit_event("conversation", fallback_planner_message)
+    planner_input = build_planner_input(metadata, preferences, aggregate_result, retrieval_context, supporting_search_results)
+    planner_result = normalize_planner_result(fallback_planner_result(planner_input))
     emit_event("planner_result", planner_result)
 
-    emit_event("status", {"message": "Leading Agent가 사용자용 최종 보고서로 정리하고 있습니다."})
-    final_handoff_message = {
-        "from": "Consult Agent",
-        "to": "Leading Agent",
-        "message": (
-            "최종 통합 결과를 전달합니다.\n"
-            f"- final status: {consult_review.get('final_classification', {}).get('status', '미분류')}\n"
-            f"- priority gaps: {', '.join(summarize_text_items(consult_review.get('priority_gaps', []), key='gap', limit=4)) or '없음'}\n"
-            f"- recommendations: {', '.join(summarize_text_items(consult_review.get('recommendations', []), key='title', limit=3)) or '없음'}\n"
-            f"- planner draft: calendar {len(planner_result.get('calendar_draft', []))}개 / todo {len(planner_result.get('todo_list', []))}개"
-        ),
-    }
-    conversation_log.append(final_handoff_message)
-    emit_event("conversation", final_handoff_message)
-    if FAST_AGENT_MODE:
-        leading_final = fallback_leading_agent_final(preferences, consult_review, planner_result)
-    else:
-        try:
-            leading_final = call_leading_agent_final(metadata, preferences, consult_review, planner_result)
-        except Exception:
-            leading_final = fallback_leading_agent_final(preferences, consult_review, planner_result)
-    conversation_log.extend(normalize_conversation_log(leading_final.get("conversation_log", [])))
+    emit_event("status", {"message": "Leading Agent가 최종 리포트를 작성하고 있습니다."})
+    try:
+        leading_final = call_leading_agent_direct_final(
+            metadata,
+            preferences,
+            ranked_jobs,
+            retrieval_context,
+            plan,
+            supporting_reviews,
+            aggregate_result,
+            planner_result,
+        )
+    except Exception:
+        leading_final = fallback_leading_agent_direct_final(preferences, aggregate_result, planner_result)
     for message in normalize_conversation_log(leading_final.get("conversation_log", [])):
+        conversation_log.append(message)
         emit_event("conversation", message)
 
     return {
-        "mode": "fast_parallel_consult_clones" if FAST_AGENT_MODE else "multi_call_parallel_consult_clones",
-        "retrievalPolicy": "consulting_source_registry_quality_gate",
+        "mode": "direct_leading_supporting_luna_fast_reasoning",
+        "retrievalPolicy": "leading_agent_evidence_bundle",
         "retrievedSources": retrieval_context,
         "supportingRetrievalResults": supporting_search_results,
-        "benchmark": plan.get("benchmark", {}),
-        "gapAnalysis": plan.get("gap_analysis", []),
-        "activatedAgents": plan.get("activated_agents", []),
+        "benchmark": benchmark,
+        "gapAnalysis": gap_analysis,
+        "activatedAgents": active_items,
         "supportingReviews": supporting_reviews,
-        "consultCloneReviews": consult_clone_reviews,
+        "supportingDebate": supporting_debate,
+        "consultCloneReviews": {},
         "laneConversations": lane_conversations,
-        "firstConsultReview": first_consult_review,
-        "consultResult": consult_review,
+        "firstConsultReview": {},
+        "consultResult": aggregate_result,
         "plannerInput": {
             "user_constraints": planner_input.get("user_constraints", {}),
             "verified_source_count": len(planner_input.get("verified_sources", [])),
@@ -3215,6 +3392,102 @@ def metadata_to_text(metadata):
     return "\n".join(lines)
 
 
+def safe_debug_write(filename, content):
+    try:
+        DEBUG_DIR.mkdir(exist_ok=True)
+        (DEBUG_DIR / filename).write_text(str(content or "")[:20000], encoding="utf-8")
+    except Exception:
+        pass
+
+
+def concise_title(line, fallback="항목"):
+    line = clean_text(line)
+    line = re.sub(r"^[-•*\d.\s]+", "", line)
+    title = re.split(r"[:;|/]|\s[-–—]\s", line, maxsplit=1)[0].strip()
+    return (title or line or fallback)[:90]
+
+
+def fallback_pdf_fields_from_text(raw_text, target_role=""):
+    """Last-resort PDF recovery: keep the UX moving even when the model returns prose."""
+    lines = [clean_text(line) for line in re.split(r"[\n\r]+", raw_text or "")]
+    lines = [re.sub(r"^[-•*]\s*", "", line).strip() for line in lines if line.strip()]
+    metadata = {category: [] for category in METADATA_SCHEMA}
+
+    def add(category, item):
+        cleaned = clean_metadata_item(category, item)
+        if any(cleaned.values()):
+            metadata[category].append(cleaned)
+
+    skill_pattern = re.compile(
+        r"\b(Python|PyTorch|TensorFlow|JAX|CUDA|C\+\+|JavaScript|TypeScript|React|Node|SQL|Docker|Git|Linux|AWS|GCP|Azure|LLM|VLM|LVLM|NLP|CV|Computer Vision|Machine Learning|Deep Learning|Transformer|LangChain|FastAPI)\b",
+        re.IGNORECASE,
+    )
+    seen_skills = set()
+    current_section = ""
+    section_aliases = {
+        "education": "education",
+        "research": "projects_and_experience",
+        "experience": "projects_and_experience",
+        "publication": "projects_and_experience",
+        "project": "projects_and_experience",
+        "award": "awards",
+        "honor": "awards",
+        "scholarship": "awards",
+        "leadership": "leadership_and_volunteering",
+        "activity": "leadership_and_volunteering",
+        "volunteer": "leadership_and_volunteering",
+        "certificate": "languages_and_certificates",
+        "language": "languages_and_certificates",
+        "skill": "skills",
+    }
+
+    for line in lines:
+        lower = line.lower()
+        for key, category in section_aliases.items():
+            if re.fullmatch(rf".*\b{re.escape(key)}s?\b.*", lower) and len(line) < 80:
+                current_section = category
+                break
+
+        for match in skill_pattern.finditer(line):
+            skill = match.group(1).strip()
+            normalized = skill.lower()
+            if normalized not in seen_skills:
+                seen_skills.add(normalized)
+                add("skills", {"name": skill, "context": line[:240], "raw_text": line[:240]})
+
+        if re.search(r"university|대학교|대학|b\.s\.|bachelor|master|ph\.?d|gpa|학사|석사|박사|전공", lower, re.IGNORECASE):
+            add("education", {"school": "", "degree": "", "major": "", "period": "", "gpa": "", "raw_text": line[:320]})
+        elif re.search(r"award|honou?r|scholarship|dean|rank|prize|winner|수상|장학|최우수|우수|순위|입상", lower, re.IGNORECASE):
+            add("awards", {"title": concise_title(line, "수상/성과"), "date": "", "issuer": "", "related_activity": "", "description": line[:360], "raw_text": line[:360]})
+        elif re.search(r"president|leader|chair|mentor|volunteer|association|community|club|회장|리더|멘토|봉사|학회|동아리|운영", lower, re.IGNORECASE):
+            add("leadership_and_volunteering", {"title": concise_title(line, "리더십/활동"), "type": "리더십/활동", "period": "", "organization": "", "role": "", "description": line[:360], "hours": "", "raw_text": line[:360]})
+        elif re.search(r"toeic|toefl|ielts|opic|teps|certificate|certification|자격|어학|수료", lower, re.IGNORECASE):
+            add("languages_and_certificates", {"name": concise_title(line, "어학/자격"), "type": "어학/자격", "score_or_level": "", "issuer": "", "date": "", "raw_text": line[:320]})
+        elif current_section == "skills":
+            continue
+        elif current_section == "projects_and_experience" or re.search(r"intern|research|paper|publication|project|github|open.?source|conference|submitted|accepted|인턴|연구|논문|프로젝트|학회|게재|제출", lower, re.IGNORECASE):
+            add("projects_and_experience", {"title": concise_title(line, "프로젝트/경험"), "type": "연구/프로젝트", "period": "", "organization": "", "role": "", "description": line[:520], "raw_text": line[:520]})
+
+    if not any(metadata.values()) and lines:
+        for line in lines[:20]:
+            add("other", {"content": line[:360], "raw_text": line[:360]})
+
+    metadata = normalize_metadata(metadata)
+    bullet = lambda category: ensure_bullet_text([metadata_to_text({category: metadata.get(category, [])})])
+    return {
+        "targetRole": target_role,
+        "metadata": metadata,
+        "education": bullet("education"),
+        "projects": ensure_bullet_text([item.get("description") or item.get("raw_text") for item in metadata.get("projects_and_experience", [])]),
+        "work": ensure_bullet_text([item.get("description") or item.get("raw_text") for item in metadata.get("projects_and_experience", []) if re.search(r"intern|회사|인턴|실무|lab|연구실", item.get("raw_text", ""), re.IGNORECASE)]),
+        "activity": ensure_bullet_text([item.get("description") or item.get("raw_text") for item in metadata.get("leadership_and_volunteering", [])]),
+        "strength": ensure_bullet_text([item.get("description") or item.get("raw_text") for item in metadata.get("awards", [])]),
+        "extra": ensure_bullet_text([item.get("name") or item.get("content") or item.get("raw_text") for category in ("skills", "languages_and_certificates", "other") for item in metadata.get(category, [])]),
+        "rawSummary": "PDF LLM 응답이 strict JSON은 아니어서 원문 응답을 기반으로 항목별 후보를 복구했습니다. 분석 전 입력칸에서 직접 수정할 수 있습니다.",
+        "fallback": True,
+    }
+
+
 def call_openai_pdf_field_mapping(pdf_bytes, filename, target_role=""):
     if not OPENAI_API_KEY:
         raise ValueError("OPENAI_API_KEY가 필요합니다. LLM으로 PDF를 읽으려면 서버 실행 시 API 키를 설정해주세요.")
@@ -3241,7 +3514,7 @@ def call_openai_pdf_field_mapping(pdf_bytes, filename, target_role=""):
     }
     body = json.dumps(
         {
-            "model": OPENAI_MODEL,
+            "model": OPENAI_PDF_MODEL,
             "input": [
                 {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
                 {
@@ -3256,6 +3529,7 @@ def call_openai_pdf_field_mapping(pdf_bytes, filename, target_role=""):
                     ],
                 },
             ],
+            "text": {"format": {"type": "json_object"}},
             "max_output_tokens": 6000,
         },
         ensure_ascii=False,
@@ -3269,9 +3543,27 @@ def call_openai_pdf_field_mapping(pdf_bytes, filename, target_role=""):
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
+    with urllib.request.urlopen(request, timeout=80) as response:
         payload = json.loads(response.read().decode("utf-8"))
-    fields = parse_json_object(response_output_text(payload))
+    raw_text = response_output_text(payload).strip()
+    if not raw_text:
+        status = payload.get("status", "") if isinstance(payload, dict) else ""
+        incomplete = payload.get("incomplete_details", {}) if isinstance(payload, dict) else {}
+        reason = incomplete.get("reason") if isinstance(incomplete, dict) else ""
+        raise ValueError(
+            "LLM PDF 응답이 비어 있습니다. "
+            f"현재 PDF 모델 `{OPENAI_PDF_MODEL}`이 파일 입력/JSON 출력을 안정적으로 처리하지 못했을 수 있습니다. "
+            "`OPENAI_PDF_MODEL=gpt-5-mini`로 서버를 다시 실행해보세요."
+            + (f" status={status} reason={reason}" if status or reason else "")
+        )
+    safe_debug_write("pdf_extract_last_raw.txt", raw_text)
+    try:
+        fields = parse_json_object(raw_text)
+    except (json.JSONDecodeError, ValueError):
+        try:
+            fields = repair_openai_json(raw_text, METADATA_CONTRACT.get("response_shape", {}), "pdf_metadata_extraction", model=OPENAI_PDF_MODEL)
+        except Exception:
+            fields = fallback_pdf_fields_from_text(raw_text, target_role)
     metadata_source = fields.get("metadata")
     if not metadata_source and any(category in fields for category in METADATA_SCHEMA):
         metadata_source = fields

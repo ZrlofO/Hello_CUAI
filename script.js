@@ -499,7 +499,7 @@ function renderCalendarDraft(calendar = []) {
   return `
     <article class="planner-calendar">
       <div class="planner-section-heading">
-        <div><span>Planner Agent</span><h6>Calendar Draft</h6></div>
+        <div><span>실행 계획</span><h6>Calendar Draft</h6></div>
         <small>사용자 확인 후 등록</small>
       </div>
       ${renderMonthCalendar(calendar)}
@@ -575,7 +575,7 @@ function renderPlannerSection(planner = {}) {
   return `
     <div class="planner-section">
       <div class="agent-header">
-        <span class="result-label">Planner Agent</span>
+        <span class="result-label">실행 계획</span>
         <h5>Calendar Draft & Todo</h5>
         ${planner.planner_summary ? `<p>${escapeHtml(planner.planner_summary)}</p>` : ""}
       </div>
@@ -795,7 +795,7 @@ function ensureLiveLaneCard(meta = {}) {
   if (!liveLaneState[key]) {
     liveLaneState[key] = {
       agentName: meta.agentName || meta.agent_name || key,
-      consultCloneName: meta.consultCloneName || `Consult Agent Clone · ${meta.agentName || key}`,
+      consultCloneName: meta.consultCloneName || `Leading Agent Review · ${meta.agentName || key}`,
       count: 0,
     };
     const lane = document.createElement("section");
@@ -914,7 +914,7 @@ async function analyzeManualStream() {
         appendLiveConversation(item.payload);
       }
       if (item.event === "agents_selected") {
-        setLiveStatus(`Consult Agent가 ${(item.payload?.activatedAgents || []).length}개의 Supporting Agent를 선택했습니다.`);
+        setLiveStatus(`Leading Agent가 ${(item.payload?.activatedAgents || []).length}개의 Supporting Agent를 선택했습니다.`);
       }
       if (item.event === "lane_started") {
         ensureLiveLaneCard(item.payload || {});
@@ -924,13 +924,13 @@ async function analyzeManualStream() {
         setLiveStatus(`${item.payload?.review?.agent_name || "Supporting Agent"}의 검토 결과가 도착했습니다.`);
       }
       if (item.event === "consult_clone_review") {
-        setLiveStatus(`${item.payload?.lane?.agent_name || "Support Agent"} lane의 Consult Clone 검토가 완료되었습니다.`);
+        setLiveStatus(`${item.payload?.lane?.agent_name || "Support Agent"} 검토가 완료되었습니다.`);
       }
       if (item.event === "consult_result") {
-        setLiveStatus("Consult Agent가 최종 통합 결과를 전달했습니다.");
+        setLiveStatus("Leading Agent가 Supporting Agent 결과를 통합했습니다.");
       }
       if (item.event === "planner_result") {
-        setLiveStatus("Planner Agent가 Calendar Draft와 Todo 초안을 전달했습니다.");
+        setLiveStatus("실행 계획 초안을 정리했습니다.");
       }
       if (item.event === "final") {
         finalData = item.payload;

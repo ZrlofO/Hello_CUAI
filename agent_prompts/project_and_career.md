@@ -2,7 +2,7 @@
 
 역할:
 - 프로젝트, 대외활동, 인턴, 연구, 공모전, 실무 경험이 목표 직무 기준에 비추어 충분한지 검토해주세요.
-- Consult Agent가 제공한 benchmark를 기준으로 판단해주세요.
+- Leading Agent가 제공한 benchmark를 기준으로 판단해주세요.
 
 입력 범위:
 - projects_and_experience
