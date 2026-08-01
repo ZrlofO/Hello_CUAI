@@ -1,5 +1,7 @@
 # HICAREER
 
+<img width="4442" height="1071" alt="Untitled-2026-08-02-0248" src="https://github.com/user-attachments/assets/874ca534-d900-4d72-bd24-40c4ec3594af" />
+
 CV/Resume를 분석해 강점과 보완점을 찾고, 전문 Support Agent의 검토 결과를 바탕으로 채용공고를 추천하는 AI 커리어 분석 서비스입니다.
 
 ## 주요 흐름
@@ -70,3 +72,7 @@ python server.py
 - API key를 Git에 커밋하지 마세요.
 - 추천 공고의 실제 모집 상태와 마감일은 원문 링크에서 최종 확인해야 합니다.
 - 분석 결과는 커리어 준비를 위한 참고 자료이며 합격을 보장하지 않습니다.
+
+## Contributors 
+
+중앙대학교 AI학과 이성욱, 오규안, 양재영, 황민아
