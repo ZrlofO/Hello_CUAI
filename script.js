@@ -7,17 +7,17 @@ const manualMode = document.querySelector("#manualMode");
 const cvFile = document.querySelector("#cvFile");
 const fileName = document.querySelector("#fileName");
 const pdfRoleInput = document.querySelector("#pdfRoleInput");
+const extractButton = document.querySelector("#extractButton");
 const analyzeButton = document.querySelector("#analyzeButton");
 const resultCard = document.querySelector("#resultCard");
 const roleInput = document.querySelector("#roleInput");
-const manualInputs = [
-  roleInput,
-  document.querySelector("#educationInput"),
-  document.querySelector("#projectInput"),
-  document.querySelector("#workInput"),
-  document.querySelector("#activityInput"),
-  document.querySelector("#strengthInput"),
-];
+const educationInput = document.querySelector("#educationInput");
+const projectInput = document.querySelector("#projectInput");
+const workInput = document.querySelector("#workInput");
+const activityInput = document.querySelector("#activityInput");
+const strengthInput = document.querySelector("#strengthInput");
+const extraInput = document.querySelector("#extraInput");
+const manualInputs = [roleInput, educationInput, projectInput, workInput, activityInput, strengthInput, extraInput];
 
 function getManualText() {
   return manualInputs
@@ -275,16 +275,42 @@ function renderAnalysis(data) {
   bindActionChecks();
 }
 
-async function analyzePdf() {
+function fillManualFields(fields) {
+  if (fields.targetRole && !roleInput.value.trim()) roleInput.value = fields.targetRole;
+  educationInput.value = fields.education || educationInput.value;
+  projectInput.value = fields.projects || projectInput.value;
+  workInput.value = fields.work || workInput.value;
+  activityInput.value = fields.activity || activityInput.value;
+  strengthInput.value = fields.strength || strengthInput.value;
+  extraInput.value = fields.extra || extraInput.value;
+}
+
+async function extractPdfToForm() {
+  if (cvFile.files.length === 0) {
+    renderMessage("PDF 대기 중", "먼저 CV PDF를 업로드해주세요.", ["PDF를 선택하면 텍스트 추출 후 질문 입력칸을 자동으로 채웁니다."]);
+    return;
+  }
+
   const formData = new FormData();
   formData.append("cv_file", cvFile.files[0]);
   formData.append("target_role", pdfRoleInput.value.trim());
+  renderMessage("PDF 추출 중", "PDF 텍스트를 읽고 질문 입력칸에 매핑하고 있어요.", ["추출 후 내용을 직접 수정한 다음 분석 버튼을 눌러주세요."]);
+  extractButton.disabled = true;
 
-  const response = await fetch("/api/analyze-cv", {
-    method: "POST",
-    body: formData,
-  });
-  return readJsonResponse(response);
+  try {
+    const response = await fetch("/api/extract-cv", { method: "POST", body: formData });
+    const data = await readJsonResponse(response);
+    fillManualFields(data.fields || {});
+    setInputMode("manual");
+    renderMessage("추출 완료", `${data.pdf?.pages || 0}페이지에서 텍스트를 추출했습니다.`, [
+      "질문 입력칸에 매핑된 내용을 확인하고 필요한 부분을 수정하세요.",
+      `추출 방식: ${data.pdf?.method || "unknown"}`,
+    ]);
+  } catch (error) {
+    renderMessage("추출 실패", error.message, ["텍스트 기반 PDF인지 확인하거나 질문 입력으로 직접 작성해주세요."]);
+  } finally {
+    extractButton.disabled = false;
+  }
 }
 
 async function analyzeManual() {
@@ -308,8 +334,8 @@ async function renderReport() {
     return;
   }
 
-  if (isPdfMode && cvFile.files.length === 0) {
-    renderMessage("PDF 대기 중", "선택은 완료됐어요. 이제 CV PDF를 업로드해주세요.", ["목표 직무도 함께 입력하면 공고 검색 정확도가 올라갑니다."]);
+  if (isPdfMode) {
+    renderMessage("먼저 텍스트 추출", "PDF를 바로 분석하지 않고 입력칸에 먼저 매핑합니다.", ["`PDF 텍스트 추출해서 입력칸 채우기` 버튼을 누른 뒤 내용을 수정하고 분석해주세요."]);
     return;
   }
 
@@ -322,7 +348,7 @@ async function renderReport() {
   analyzeButton.disabled = true;
 
   try {
-    const data = isPdfMode ? await analyzePdf() : await analyzeManual();
+    const data = await analyzeManual();
     renderAnalysis(data);
   } catch (error) {
     renderMessage("분석 실패", error.message, ["백엔드는 `python3 server.py`로 실행해야 하고, 스캔 PDF는 텍스트 추출이 어려울 수 있습니다."]);
@@ -338,4 +364,5 @@ backFromManual.addEventListener("click", resetInputMode);
 cvFile.addEventListener("change", () => {
   fileName.textContent = cvFile.files[0]?.name || "이력서 또는 CV 파일을 올려주세요.";
 });
+extractButton?.addEventListener("click", extractPdfToForm);
 analyzeButton.addEventListener("click", renderReport);

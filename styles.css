@@ -1254,3 +1254,11 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+#extractButton {
+  margin-top: 14px;
+}
+
+.question-grid textarea#extraInput {
+  min-height: 180px;
+}

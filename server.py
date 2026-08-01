@@ -1086,6 +1086,69 @@ def safe_llm_report(cv_text, summary, ranked_jobs, agent):
 
 
 
+def section_between(text_value, start_patterns, end_patterns):
+    lowered = text_value.lower()
+    starts = [lowered.find(pattern.lower()) for pattern in start_patterns]
+    starts = [index for index in starts if index >= 0]
+    if not starts:
+        return ""
+    start = min(starts)
+    next_start = len(text_value)
+    for pattern in end_patterns:
+        index = lowered.find(pattern.lower(), start + 1)
+        if index >= 0:
+            next_start = min(next_start, index)
+    return clean_text(text_value[start:next_start])[:1600]
+
+
+def map_cv_text_to_fields(cv_text, target_role=""):
+    education = section_between(
+        cv_text,
+        ["Education", "학력", "University", "B.S.", "Bachelor"],
+        ["Research Experience", "Experience", "Publications", "Projects", "Honors", "Awards", "Activities"],
+    )
+    projects = "\n\n".join(
+        item
+        for item in [
+            section_between(cv_text, ["Publications", "Publication"], ["Manuscripts", "Scholarships", "Honors", "Awards", "Leadership", "Activities"]),
+            section_between(cv_text, ["Manuscripts", "Under Review"], ["Scholarships", "Honors", "Awards", "Leadership", "Activities"]),
+            section_between(cv_text, ["Projects", "Project"], ["Experience", "Honors", "Awards", "Leadership", "Activities"]),
+        ]
+        if item
+    )[:2400]
+    work = section_between(
+        cv_text,
+        ["Research Experience", "Work Experience", "Experience", "Intern"],
+        ["Publications", "Manuscripts", "Scholarships", "Honors", "Awards", "Leadership", "Activities"],
+    )
+    activity = "\n\n".join(
+        item
+        for item in [
+            section_between(cv_text, ["Honors", "Awards", "Honors & Awards"], ["Leadership", "Service", "Activities", "Language"]),
+            section_between(cv_text, ["Leadership", "Service"], ["Activities", "Language", "Skills"]),
+            section_between(cv_text, ["Activities"], ["Language", "Skills"]),
+        ]
+        if item
+    )[:2200]
+    strengths = []
+    signals = evidence_signals(cv_text)
+    phrases = extract_keyphrases(cv_text, top_n=8)
+    if phrases:
+        strengths.append("핵심 표현: " + ", ".join(phrases[:6]))
+    if signals:
+        strengths.append("외부 증거: " + ", ".join(signals[:8]))
+
+    mapped = {
+        "targetRole": target_role,
+        "education": education,
+        "projects": projects,
+        "work": work,
+        "activity": activity,
+        "strength": "\n".join(strengths),
+        "extra": cv_text[:5000],
+    }
+    return mapped
+
 def parse_analyze_request(headers, body):
     content_type = headers.get("Content-Type", "")
     if content_type.startswith("multipart/form-data"):
@@ -1121,6 +1184,9 @@ class HICareerHandler(SimpleHTTPRequestHandler):
         if parsed_url.path == "/api/analyze-cv":
             self.handle_analyze_cv()
             return
+        if parsed_url.path == "/api/extract-cv":
+            self.handle_extract_cv()
+            return
         self.send_error(404, "Not found")
 
     def handle_popular_jobs(self, parsed_url):
@@ -1133,6 +1199,33 @@ class HICareerHandler(SimpleHTTPRequestHandler):
             self.send_json(jobs)
         except (urllib.error.URLError, TimeoutError, ElementTree.ParseError, ValueError):
             self.send_json(FALLBACK_JOBS[:limit])
+
+    def handle_extract_cv(self):
+        content_length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(content_length)
+        try:
+            cv_text, target_role, filename, pdf_meta = parse_analyze_request(self.headers, body)
+            if not cv_text.strip():
+                self.send_json(
+                    {
+                        "error": "PDF 텍스트를 추출하지 못했습니다. 텍스트 기반 PDF를 업로드하거나 직접 입력해주세요.",
+                        "text": "",
+                        "fields": {},
+                    },
+                    status=422,
+                )
+                return
+            self.send_json(
+                {
+                    "source": "pdf" if filename else "manual",
+                    "filename": filename,
+                    "pdf": pdf_meta,
+                    "text": cv_text,
+                    "fields": map_cv_text_to_fields(cv_text, target_role),
+                }
+            )
+        except (json.JSONDecodeError, ValueError):
+            self.send_json({"error": "요청 형식이 올바르지 않습니다.", "text": "", "fields": {}}, status=400)
 
     def handle_analyze_cv(self):
         content_length = int(self.headers.get("Content-Length", "0"))
