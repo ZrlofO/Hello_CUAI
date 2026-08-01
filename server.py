@@ -1,6 +1,5 @@
 import base64
 import html
-import io
 import json
 import math
 import mimetypes
@@ -10,7 +9,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import zlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from xml.etree import ElementTree
@@ -461,73 +459,6 @@ GAP_RECOMMENDATIONS = {
     "Hackathon": "해커톤 결과물을 데모 링크나 수상/평가 기준과 함께 보여주세요.",
     "Publication": "대표 논문 2~3개만 목표 직무와 연결해 요약하세요.",
 }
-
-def decode_pdf_literal(value):
-    value = value.replace(r"\(", "(").replace(r"\)", ")").replace(r"\\", "\\")
-    value = re.sub(r"\\([nrtbf])", " ", value)
-    value = re.sub(r"\\[0-7]{1,3}", " ", value)
-    return value
-
-
-def extract_pdf_text_with_fallback(pdf_bytes):
-    chunks = []
-    raw_streams = re.findall(rb"stream\r?\n(.*?)\r?\nendstream", pdf_bytes, re.S)
-    candidates = [pdf_bytes]
-    for stream in raw_streams:
-        stream = stream.strip(b"\r\n")
-        try:
-            candidates.append(zlib.decompress(stream))
-        except zlib.error:
-            candidates.append(stream)
-
-    for data in candidates:
-        decoded = data.decode("latin-1", errors="ignore")
-        literal_strings = re.findall(r"\(((?:[^()]|\\.){2,})\)", decoded)
-        for item in literal_strings:
-            text = decode_pdf_literal(item)
-            if re.search(r"[A-Za-z가-힣]", text):
-                chunks.append(text)
-        hex_strings = re.findall(r"<([0-9A-Fa-f\s]{8,})>", decoded)
-        for item in hex_strings:
-            compact = re.sub(r"\s+", "", item)
-            try:
-                text = bytes.fromhex(compact).decode("utf-16-be", errors="ignore")
-            except ValueError:
-                continue
-            if re.search(r"[A-Za-z가-힣]", text):
-                chunks.append(text)
-    return clean_text(" ".join(chunks))
-
-
-def extract_text_from_page(page):
-    try:
-        return page.extract_text(extraction_mode="layout") or ""
-    except TypeError:
-        return page.extract_text() or ""
-
-
-def extract_pdf_text(pdf_bytes):
-    for module_name in ("pypdf", "PyPDF2"):
-        try:
-            module = __import__(module_name)
-            reader = module.PdfReader(io.BytesIO(pdf_bytes))
-            pages = [extract_text_from_page(page) for page in reader.pages]
-            text = clean_text("\n".join(pages))
-            if text:
-                return {
-                    "text": text,
-                    "method": module_name,
-                    "pages": len(reader.pages),
-                }
-        except Exception:
-            continue
-
-    fallback_text = extract_pdf_text_with_fallback(pdf_bytes)
-    return {
-        "text": fallback_text,
-        "method": "fallback",
-        "pages": 0,
-    }
 
 
 def parse_multipart(body, content_type):
@@ -1087,34 +1018,77 @@ def safe_llm_report(cv_text, summary, ranked_jobs, agent):
 
 
 
+def ensure_bullet_text(value):
+    if isinstance(value, list):
+        items = [clean_text(str(item)) for item in value if clean_text(str(item))]
+        return "\n".join(f"- {item.lstrip('-• ').strip()}" for item in items)
+
+    value = clean_text(str(value or ""))
+    if not value:
+        return ""
+    lines = [line.strip() for line in re.split(r"\n+|(?<=다\.)\s+|(?<=함\.)\s+", value) if line.strip()]
+    return "\n".join(f"- {line.lstrip('-• ').strip()}" for line in lines)
+
+
 def call_openai_pdf_field_mapping(pdf_bytes, filename, target_role=""):
     if not OPENAI_API_KEY:
         raise ValueError("OPENAI_API_KEY가 필요합니다. LLM으로 PDF를 읽으려면 서버 실행 시 API 키를 설정해주세요.")
 
     encoded_pdf = base64.b64encode(pdf_bytes).decode("ascii")
     system_prompt = (
-        "You are HICAREER, a Korean CV parsing agent. Read the attached PDF directly. "
-        "Do not invent details. Extract only information present in the document. "
-        "Return JSON only. Each field should be Korean bullet points, concise and editable by the user."
+        "You are HICAREER, a Korean CV restructuring agent. Read the attached PDF directly. "
+        "Your job is NOT raw OCR transcription. Your job is to rewrite the CV into clean Korean bullet points for editable form fields. "
+        "Do not invent facts. Preserve concrete institutions, venues, years, awards, ranks, metrics, and research topics. "
+        "Every field except targetRole and rawSummary must contain Korean bullet points only. Return JSON only."
     )
+    few_shot_example = {
+        "bad_raw_input_style": "Research Experience Computer Vision&Machine Learning Lab,KAIST Jun2026–Present Research Intern... Publications QuerytheRelevant,DiversifytheContext... Honors&Awards BestExcellenceAward...",
+        "good_output_style": {
+            "work": [
+                "KAIST Computer Vision & Machine Learning Lab 연구 인턴으로 3D-aware Vision-Language Model, 악천후 환경 인지, physical grounding 및 신뢰 가능한 embodied intelligence 연구 수행",
+                "중앙대학교 MULTI Lab 연구 인턴으로 Large Vision-Language Model의 효율적 추론과 vision-language representation 분석 연구 수행",
+                "질의 연관성을 반영한 visual-token pruning 기법과 projector-space에서의 token 역할 분석 방법론 설계",
+                "다양한 LVLM과 multimodal benchmark를 활용한 visual-token 선택·분석 파이프라인 구축 및 성능 평가"
+            ],
+            "projects": [
+                "VLM의 context-aware token pruning 연구를 수행하여 ECCV 2026 논문 게재 확정",
+                "의료 진단을 위한 gated distillation 및 decoupled learning 연구를 수행하고 ICTC 2025 논문 게재 및 교내 학술대회 최우수 논문상 수상",
+                "실시간 자율주행 인지를 위한 효율적 2D BEV fusion 프레임워크를 개발하고 ICTC 2025 논문 게재 및 우수 논문상 수상",
+                "Vision-Language Model의 projector-space modality alignment와 token 역할 형성 과정을 분석한 연구를 NeurIPS 2026에 제출"
+            ],
+            "activity": [
+                "중앙대학교 AI 학회 CUAI 회장으로 학술 프로그램, 연구 활동 및 커뮤니티 운영 총괄",
+                "NIPA 지원사업 제안서를 주도하여 KT Cloud GPU 자원 A100 2대와 V100 2대를 확보하고 학회 연구·개발을 위한 GPU 서버 운영 체계 구축"
+            ],
+            "strength": [
+                "전공 평점 4.40/4.50, 전공 석차 2위를 기록하고 Dean’s List 및 성적 우수 장학금 다수 수혜",
+                "논문 게재, 학회 발표, 해커톤 수상, 리더보드 성과를 통해 연구 역량과 외부 검증 근거를 함께 보유"
+            ]
+        }
+    }
     user_prompt = {
         "target_role": target_role,
         "instructions": [
-            "PDF를 그대로 읽고 아래 입력칸에 들어갈 내용을 bullet point로 정리해줘.",
-            "원문을 복붙하지 말고, 사용자가 수정하기 좋게 정제해줘.",
-            "논문/프로젝트/오픈소스는 결과, 역할, 사용 기술, 성과 중심으로 정리해줘.",
-            "인턴/실무 경험은 기관, 기간, 역할, 기여도 중심으로 정리해줘.",
-            "대외활동/공모전/봉사는 수상, 리더십, 운영 경험 중심으로 정리해줘.",
-            "기타에는 놓치기 쉬운 원문 세부사항, 링크, 정량 수치, 추가로 검토할 내용을 넣어줘.",
+            "PDF를 직접 읽고 입력칸에 들어갈 내용을 한국어 bullet point로 재작성해줘.",
+            "원문을 그대로 붙여넣지 말고, 채용 담당자가 보기 좋은 CV bullet로 정제해줘.",
+            "각 bullet은 동사/성과 중심으로 1문장 작성하고, 가능한 경우 기관·역할·기술·성과·연도·순위·학회명을 포함해줘.",
+            "붙어 있는 PDF 텍스트를 자연스럽게 복원해줘. 예: CandidateinArtificialIntelligence → Artificial Intelligence 전공 학부생.",
+            "education에는 학력, GPA, 석차, 장학을 정리해줘.",
+            "projects에는 논문, 연구 프로젝트, 오픈소스, 대회 모델 개발을 정리해줘.",
+            "work에는 인턴, 연구실 경험, 실무 역할과 기여를 정리해줘.",
+            "activity에는 리더십, 학회 운영, 대외활동, 수상, 봉사, 공모전을 정리해줘.",
+            "strength에는 목표 직무 관점에서 가져갈 핵심 강점만 정리해줘.",
+            "extra에는 링크, 언어점수, 빠진 기술스택, 확인이 필요한 세부사항을 정리해줘.",
         ],
+        "few_shot_example": few_shot_example,
         "output_schema": {
             "targetRole": "string",
-            "education": "bullet string",
-            "projects": "bullet string",
-            "work": "bullet string",
-            "activity": "bullet string",
-            "strength": "bullet string",
-            "extra": "bullet string",
+            "education": ["Korean bullet string"],
+            "projects": ["Korean bullet string"],
+            "work": ["Korean bullet string"],
+            "activity": ["Korean bullet string"],
+            "strength": ["Korean bullet string"],
+            "extra": ["Korean bullet string"],
             "rawSummary": "short Korean summary",
         },
     }
@@ -1153,13 +1127,13 @@ def call_openai_pdf_field_mapping(pdf_bytes, filename, target_role=""):
     fields = parse_json_object(response_output_text(payload))
     normalized_fields = {
         "targetRole": fields.get("targetRole") or target_role,
-        "education": fields.get("education", ""),
-        "projects": fields.get("projects", ""),
-        "work": fields.get("work", ""),
-        "activity": fields.get("activity", ""),
-        "strength": fields.get("strength", ""),
-        "extra": fields.get("extra", ""),
-        "rawSummary": fields.get("rawSummary", ""),
+        "education": ensure_bullet_text(fields.get("education", "")),
+        "projects": ensure_bullet_text(fields.get("projects", "")),
+        "work": ensure_bullet_text(fields.get("work", "")),
+        "activity": ensure_bullet_text(fields.get("activity", "")),
+        "strength": ensure_bullet_text(fields.get("strength", "")),
+        "extra": ensure_bullet_text(fields.get("extra", "")),
+        "rawSummary": clean_text(fields.get("rawSummary", "")),
     }
     combined_text = "\n\n".join(str(value) for value in normalized_fields.values() if value)
     return combined_text, normalized_fields
@@ -1239,9 +1213,12 @@ def parse_analyze_request(headers, body):
         pdf_meta = {"method": "manual", "pages": 0}
         if pdf_file:
             filename = pdf_file["filename"]
-            extracted = extract_pdf_text(pdf_file["content"])
-            cv_text = extracted["text"]
-            pdf_meta = {"method": extracted["method"], "pages": extracted["pages"]}
+            cv_text, mapped_fields = call_openai_pdf_field_mapping(
+                pdf_file["content"],
+                filename,
+                target_role,
+            )
+            pdf_meta = {"method": "openai_input_file", "pages": None, "fields": mapped_fields}
         return cv_text, target_role, filename, pdf_meta
 
     payload = json.loads(body.decode("utf-8") or "{}")

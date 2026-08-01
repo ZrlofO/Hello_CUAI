@@ -1,1 +1,1 @@
-pypdf==6.14.2
+# No required Python packages for local HICAREER MVP.

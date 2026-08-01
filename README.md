@@ -62,7 +62,7 @@ python3 server.py
 
 ## CV 분석 및 fit ranking MVP
 
-`/api/analyze-cv`는 PDF 업로드 또는 질문형 입력 텍스트를 받아 현재 채용공고와 비교합니다.
+`/api/analyze-cv`는 질문형 입력 텍스트를 받아 현재 채용공고와 비교합니다. PDF는 먼저 `/api/extract-cv`에서 OpenAI file input으로 읽고, 입력칸별 bullet point로 정리한 뒤 사용자가 수정하는 흐름입니다.
 
 동작 흐름:
 
@@ -72,7 +72,9 @@ python3 server.py
 4. cosine similarity와 기술스택 overlap을 합쳐 fit score를 계산합니다.
 5. 추천 이유, 부족한 증거, 보완 액션을 함께 반환합니다.
 
-현재 PDF 정리는 `/api/extract-cv`에서 OpenAI file input을 사용합니다. `pypdf`는 분석 fallback/로컬 테스트용으로 남아 있지만, 사용자가 보는 PDF 입력칸 매핑 흐름에는 사용하지 않습니다.
+현재 PDF 정리는 `/api/extract-cv`에서 OpenAI file input을 사용합니다. 로컬 PDF 파서로 텍스트를 덤프하지 않고, LLM이 PDF 원본을 읽어 입력칸별 bullet point로 정리합니다.
+
+PDF 정리 프롬프트는 few-shot 예시를 포함해 원문 OCR 덤프를 그대로 넣지 않고, 기관·역할·기술·성과·연도·순위·학회명을 보존한 한국어 bullet point로 재작성하도록 구성했습니다.
 
 ### 자동 핵심 표현 추출
 

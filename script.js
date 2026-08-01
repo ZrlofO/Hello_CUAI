@@ -234,7 +234,7 @@ function renderAnalysis(data) {
     <h3>${summary.targetRole} 기준 추천 공고를 랭킹했습니다.</h3>
     <div class="summary-grid">
       <div><strong>${summary.extractedCharacters}</strong><span>추출 문자</span></div>
-      <div><strong>${summary.pdf?.pages || 0}</strong><span>읽은 페이지</span></div>
+      <div><strong>${summary.pdf?.method === "openai_input_file" ? "LLM" : summary.pdf?.pages || 0}</strong><span>정리 방식</span></div>
       <div><strong>${rankedJobs.length}</strong><span>추천 공고</span></div>
     </div>
     <p class="extract-meta">정리 방식: ${summary.pdf?.method || "manual"}</p>
@@ -304,8 +304,8 @@ async function extractPdfToForm() {
     const data = await readJsonResponse(response);
     fillManualFields(data.fields || {});
     setInputMode("manual");
-    renderMessage("추출 완료", `${data.pdf?.pages || 0}PDF를 읽고 입력칸을 채웠습니다.`, [
-      "질문 입력칸에 매핑된 내용을 확인하고 필요한 부분을 수정하세요.",
+    renderMessage("정리 완료", "LLM이 PDF를 읽고 입력칸을 bullet point로 채웠습니다.", [
+      "각 입력칸을 확인하고 필요한 부분을 수정한 뒤 분석 버튼을 눌러주세요.",
       `정리 방식: ${data.pdf?.method || "unknown"}`,
     ]);
   } catch (error) {
@@ -337,7 +337,7 @@ async function renderReport() {
   }
 
   if (isPdfMode) {
-    renderMessage("먼저 텍스트 추출", "PDF를 바로 분석하지 않고 LLM으로 입력칸을 먼저 채웁니다.", ["`LLM으로 PDF 정리해서 입력칸 채우기` 버튼을 누른 뒤 내용을 수정하고 분석해주세요."]);
+    renderMessage("먼저 PDF 정리", "PDF를 바로 분석하지 않고 LLM으로 입력칸을 먼저 채웁니다.", ["`LLM으로 PDF 정리해서 입력칸 채우기` 버튼을 누른 뒤 내용을 수정하고 분석해주세요."]);
     return;
   }
 
@@ -353,7 +353,7 @@ async function renderReport() {
     const data = await analyzeManual();
     renderAnalysis(data);
   } catch (error) {
-    renderMessage("분석 실패", error.message, ["백엔드는 `python3 server.py`로 실행해야 하고, 스캔 PDF는 텍스트 추출이 어려울 수 있습니다."]);
+    renderMessage("분석 실패", error.message, ["백엔드는 `python3 server.py`로 실행해야 하고, PDF 정리는 OPENAI_API_KEY가 필요합니다."]);
   } finally {
     analyzeButton.disabled = false;
   }
