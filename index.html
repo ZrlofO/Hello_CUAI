@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="HICAREER는 CV를 분석해 강점, 보완점, 추천 활동과 지원 기업 방향을 제안하는 AI 커리어 에이전트입니다."
+    />
+    <title>HICAREER | AI 취업 전략 에이전트</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+KR:wght@400;500;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="grain"></div>
+    <header class="site-header">
+      <nav class="nav">
+        <a class="brand" href="#" aria-label="HICAREER 홈">
+          <span class="brand-mark">HI</span>
+          <span>HICAREER</span>
+        </a>
+        <div class="nav-links" aria-label="주요 메뉴">
+          <a href="#features">기능</a>
+          <a href="#demo">CV 진단</a>
+          <a href="#roadmap">추천 로드맵</a>
+        </div>
+        <a class="nav-cta" href="#demo">무료 진단 시작</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <span class="eyebrow">AI Career Agent for Korean Job Seekers</span>
+          <h1>내 CV를 읽고, 지금 당장 움직일 취업 전략을 제안합니다.</h1>
+          <p>
+            HICAREER는 경력·프로젝트·활동 경험을 분석해 강점은 더 선명하게,
+            부족한 지점은 실제로 채울 수 있는 활동과 기업 추천으로 연결합니다.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#demo">CV 진단해보기</a>
+            <a class="button secondary" href="#features">어떻게 도와주나요?</a>
+          </div>
+          <div class="trust-row" aria-label="서비스 특징">
+            <span>강점 포지셔닝</span>
+            <span>핏한 활동 추천</span>
+            <span>기업 지원 전략</span>
+          </div>
+        </div>
+
+        <aside class="hero-card" aria-label="HICAREER 분석 예시">
+          <div class="card-topline">
+            <span>CV Readiness</span>
+            <strong>86%</strong>
+          </div>
+          <div class="score-ring" aria-hidden="true">
+            <span>HI</span>
+          </div>
+          <div class="signal-list">
+            <div>
+              <span class="signal positive"></span>
+              <p><strong>강점</strong> 데이터 기반 프로젝트 스토리 우수</p>
+            </div>
+            <div>
+              <span class="signal warning"></span>
+              <p><strong>보완</strong> 대외활동·리더십 근거 추가 필요</p>
+            </div>
+            <div>
+              <span class="signal info"></span>
+              <p><strong>추천</strong> B2B SaaS, 헬스케어 AI, HR Tech</p>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="section" id="features">
+        <div class="section-heading">
+          <span class="eyebrow">What HICAREER Does</span>
+          <h2>피드백에서 끝나지 않고, 다음 행동까지 연결합니다.</h2>
+        </div>
+        <div class="feature-grid">
+          <article>
+            <span class="feature-icon">01</span>
+            <h3>CV 강점·약점 분석</h3>
+            <p>경험의 밀도, 직무 키워드, 성과 표현, 스토리 일관성을 기준으로 진단합니다.</p>
+          </article>
+          <article>
+            <span class="feature-icon">02</span>
+            <h3>현재 가능한 활동 추천</h3>
+            <p>봉사활동, 공모전, 대외활동, 부트캠프 중 내 분야와 맞는 선택지를 제안합니다.</p>
+          </article>
+          <article>
+            <span class="feature-icon">03</span>
+            <h3>지원 기업 핏 매칭</h3>
+            <p>CV의 강점이 설득력 있게 보이는 산업·직무·기업 유형을 우선순위로 정리합니다.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="diagnosis" id="demo">
+        <div class="diagnosis-copy">
+          <span class="eyebrow">Interactive Preview</span>
+          <h2>간단히 붙여넣고, 커리어 방향을 미리 확인하세요.</h2>
+          <p>
+            아래 데모는 실제 제품의 핵심 흐름을 보여주는 프론트엔드 프로토타입입니다.
+            CV 텍스트를 넣으면 키워드 기반으로 강점과 보완점을 즉시 정리합니다.
+          </p>
+        </div>
+        <div class="diagnosis-panel">
+          <label for="cvInput">CV 또는 자기소개 요약</label>
+          <textarea
+            id="cvInput"
+            placeholder="예: 컴퓨터공학 전공, React 프로젝트 2개, 데이터 분석 인턴, 교내 동아리 운영..."
+          ></textarea>
+          <button class="button primary full" id="analyzeButton" type="button">AI 진단 보기</button>
+          <div class="result-card" id="resultCard">
+            <span class="result-label">샘플 리포트</span>
+            <h3>프로젝트 경험은 강하지만, 외부 검증 활동이 더 필요해요.</h3>
+            <ul>
+              <li>강점: 실무형 프로젝트와 기술 키워드가 명확합니다.</li>
+              <li>보완: 봉사활동·대외활동·수상 이력이 약하면 신뢰 근거가 부족해질 수 있습니다.</li>
+              <li>추천: IT 서비스 기획, 데이터 분석, AI 스타트업 인턴십을 우선 탐색하세요.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="section roadmap" id="roadmap">
+        <div class="section-heading">
+          <span class="eyebrow">Action Roadmap</span>
+          <h2>진단 후에는 이런 식으로 움직입니다.</h2>
+        </div>
+        <div class="timeline">
+          <div>
+            <span>Week 1</span>
+            <h3>CV 메시지 정리</h3>
+            <p>지원 직무별 핵심 경험 3개와 성과 문장을 재구성합니다.</p>
+          </div>
+          <div>
+            <span>Week 2</span>
+            <h3>빈칸 채우기</h3>
+            <p>부족한 활동 유형을 찾고, 모집 중인 활동·공모전·봉사 기회를 연결합니다.</p>
+          </div>
+          <div>
+            <span>Week 3</span>
+            <h3>지원 기업 리스트업</h3>
+            <p>강점이 잘 먹히는 회사군을 나누고 우선 지원 순서를 설계합니다.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>HICAREER</p>
+      <span>CV를 전략으로 바꾸는 AI 취업 파트너</span>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>
