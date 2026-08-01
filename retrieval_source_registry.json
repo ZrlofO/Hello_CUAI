@@ -1,0 +1,86 @@
+{
+  "source_registry": [
+    {
+      "source_name": "링커리어",
+      "homepage_url": "https://linkareer.com/",
+      "seed_urls": ["https://linkareer.com/recruit-home", "https://community.linkareer.com/team"],
+      "source_category": ["internship", "entry_level_job", "external_activity", "competition", "team_recruiting", "career_community"],
+      "primary_use": ["인턴/신입 공고 탐색", "대외활동 탐색", "공모전 탐색", "팀원/스터디 모집 참고", "취업 커뮤니티 공개 글 참고"],
+      "access_method": "domain_limited_retrieval",
+      "allowed_domains": ["linkareer.com", "community.linkareer.com"]
+    },
+    {
+      "source_name": "위비티",
+      "homepage_url": "https://www.wevity.com/",
+      "seed_urls": ["https://www.wevity.com/"],
+      "source_category": ["competition", "external_activity", "supporters", "contest"],
+      "primary_use": ["공모전 탐색", "경진대회 탐색", "대외활동 탐색", "서포터즈 모집 탐색"],
+      "access_method": "domain_limited_retrieval",
+      "allowed_domains": ["wevity.com", "www.wevity.com"]
+    },
+    {
+      "source_name": "씽굿",
+      "homepage_url": "https://www.thinkcontest.com/",
+      "seed_urls": ["https://www.thinkcontest.com/"],
+      "source_category": ["competition", "contest", "external_activity"],
+      "primary_use": ["공모전 탐색", "경진대회 탐색", "아이디어 공모전 탐색", "대외활동 탐색"],
+      "access_method": "domain_limited_retrieval",
+      "allowed_domains": ["thinkcontest.com", "www.thinkcontest.com"]
+    },
+    {
+      "source_name": "자소설닷컴",
+      "homepage_url": "https://jasoseol.com/",
+      "seed_urls": ["https://jasoseol.com/", "https://secure.jasoseol.com/"],
+      "source_category": ["job_posting", "recruit_calendar", "company_info", "self_introduction_reference", "career_community"],
+      "primary_use": ["채용공고 탐색", "채용 일정 확인", "기업 정보 참고", "자기소개서 문항 또는 공개 채용 정보 참고"],
+      "access_method": "domain_limited_retrieval",
+      "allowed_domains": ["jasoseol.com", "secure.jasoseol.com"]
+    },
+    {
+      "source_name": "잡코리아",
+      "homepage_url": "https://www.jobkorea.co.kr/",
+      "seed_urls": ["https://www.jobkorea.co.kr/"],
+      "source_category": ["job_posting", "company_info", "entry_level_job", "internship"],
+      "primary_use": ["채용공고 탐색", "기업 정보 참고", "직무별 자격요건 및 우대사항 참고"],
+      "access_method": "domain_limited_retrieval",
+      "allowed_domains": ["jobkorea.co.kr", "www.jobkorea.co.kr", "m.jobkorea.co.kr"]
+    },
+    {
+      "source_name": "잡플래닛",
+      "homepage_url": "https://www.jobplanet.co.kr/",
+      "seed_urls": ["https://www.jobplanet.co.kr/", "https://www.jobplanet.co.kr/search", "https://www.jobplanet.co.kr/job_postings/search_guide"],
+      "source_category": ["company_info", "company_review", "salary_reference", "interview_reference", "job_posting"],
+      "primary_use": ["기업 정보 참고", "기업 리뷰 참고", "연봉 정보 참고", "면접 후기 또는 조직문화 참고", "채용공고 보조 확인"],
+      "access_method": "domain_limited_retrieval",
+      "allowed_domains": ["jobplanet.co.kr", "www.jobplanet.co.kr", "m.jobplanet.co.kr"]
+    },
+    {
+      "source_name": "기업 공식 홈페이지",
+      "homepage_url": "",
+      "seed_urls": [],
+      "source_category": ["company_career_page", "official_job_posting", "company_info", "business_info", "official_announcement"],
+      "primary_use": ["기업 공식 채용공고 확인", "기업 사업영역 확인", "직무 설명 확인", "공식 모집 요강 검증"],
+      "access_method": "official_page_retrieval",
+      "allowed_domains": []
+    },
+    {
+      "source_name": "시험별 공식 사이트",
+      "homepage_url": "",
+      "seed_urls": ["https://www.q-net.or.kr/", "https://m.exam.toeic.co.kr/", "https://www.opic.or.kr/"],
+      "source_category": ["certificate_exam", "language_test", "test_schedule", "registration_period", "score_release_date"],
+      "primary_use": ["자격시험 일정 확인", "어학시험 일정 확인", "접수 기간 확인", "성적 발표일 확인", "시험 주기 확인"],
+      "access_method": "official_site_retrieval",
+      "allowed_domains": ["q-net.or.kr", "www.q-net.or.kr", "exam.toeic.co.kr", "m.exam.toeic.co.kr", "opic.or.kr", "www.opic.or.kr"]
+    }
+  ],
+  "priority_policy": {
+    "job_posting": ["기업 공식 홈페이지", "잡코리아", "자소설닷컴", "링커리어", "잡플래닛"],
+    "company_info": ["기업 공식 홈페이지", "잡코리아", "자소설닷컴", "잡플래닛"],
+    "company_review": ["잡플래닛"],
+    "competition": ["위비티", "씽굿", "링커리어"],
+    "external_activity": ["링커리어", "위비티", "씽굿"],
+    "team_recruiting": ["링커리어"],
+    "certificate_exam": ["시험별 공식 사이트"],
+    "language_test": ["시험별 공식 사이트"]
+  }
+}

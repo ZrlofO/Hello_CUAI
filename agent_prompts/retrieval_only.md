@@ -2,10 +2,10 @@ Retrieval-Only Consulting 규칙:
 
 - 이 시스템은 직접 크롤링, Selenium, 사이트별 scraper, 비공개 데이터 접근을 사용하지 않습니다.
 - Retrieval Tool은 공개 웹 검색, 공개 페이지 확인, 페이지 내 정보 탐색, URL 기반 근거 수집에만 사용합니다.
-- Retrieval Tool의 1차 책임은 Consult Agent에게 있습니다.
+- Retrieval Tool의 책임은 Consult Agent에게 있습니다.
 - Leading Agent는 직접 Retrieval Tool을 사용하지 않습니다.
-- Supporting Agent는 서버가 담당 범위별로 제공한 internet_search_results를 검색 도구 결과로 사용할 수 있습니다.
-- Supporting Agent는 Consult Agent가 제공한 metadata_subset, benchmark, retrieved_sources, assigned_gap, internet_search_results만 근거로 판단합니다.
+- Supporting Agent는 직접 Retrieval Tool을 사용하지 않습니다.
+- Supporting Agent는 Consult Agent가 제공한 metadata_subset, benchmark, retrieved_sources, assigned_gap만 근거로 판단합니다.
 - Supporting Agent가 추가 자료가 필요하다고 판단하면 message_to_consult_agent에 구체적인 검색/검증 요청을 남겨주세요.
 - 검색 결과는 benchmark용 자료와 recommendation용 자료를 구분해야 합니다.
 - 추천 후보에는 공개 source URL이 있어야 합니다.
@@ -50,13 +50,9 @@ Recommendation Source Format:
   "notes": ""
 }
 
-Supporting Agent Internet Search Result Format:
+Retrieval Audit Format:
 {
-  "source_type": "supporting_agent_web_search",
-  "agent_key": "",
-  "query": "",
-  "title": "",
-  "url": "",
-  "snippet": "",
-  "retrieved_at": ""
+  "raw_search_candidates": [],
+  "verified_sources": [],
+  "discarded_sources": []
 }

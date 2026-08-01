@@ -24,11 +24,12 @@ PORT = int(os.getenv("PORT", "8080"))
 WORK24_AUTH_KEY = os.getenv("WORK24_AUTH_KEY", "")
 WORK24_ENDPOINT = "https://www.work24.go.kr/cm/openApi/call/wk/callOpenApiSvcInfo210L01.do"
 CACHE_TTL_SECONDS = int(os.getenv("JOBS_CACHE_TTL_SECONDS", "600"))
-DEFAULT_JOB_KEYWORD = os.getenv("JOB_SEARCH_KEYWORD", "신입 개발 데이터 AI")
+DEFAULT_JOB_KEYWORD = os.getenv("JOB_SEARCH_KEYWORD", "신입 채용")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
 OPENAI_ENDPOINT = "https://api.openai.com/v1/responses"
 AGENT_PROMPT_DIR = ROOT / "agent_prompts"
+RETRIEVAL_SOURCE_REGISTRY_PATH = ROOT / "retrieval_source_registry.json"
 DEBUG_DIR = ROOT / "debug"
 SUPPORTING_SEARCH_LIMIT_PER_AGENT = 8
 CONSULT_SUCCESS_CASE_LIMIT = 10
@@ -39,66 +40,66 @@ FALLBACK_JOBS = [
     {
         "title": "Junior AI Engineer",
         "company": "헬스케어 AI 스타트업",
-        "category": "ai",
+        "category": "unclassified",
         "location": "서울 · 하이브리드",
         "deadline": "D-9",
         "fit": 94,
-        "skills": ["Python", "LLM", "데이터 전처리"],
+        "skills": [],
         "reason": "프로젝트·논문·해커톤 경험을 강점으로 가져가기 좋은 공고",
         "url": "diagnosis.html",
     },
     {
         "title": "Frontend Developer Intern",
         "company": "B2B SaaS 기업",
-        "category": "dev",
+        "category": "unclassified",
         "location": "판교 · 인턴",
         "deadline": "D-12",
         "fit": 89,
-        "skills": ["React", "TypeScript", "UI 구현"],
+        "skills": [],
         "reason": "배포 프로젝트와 GitHub 증거를 보여주기 좋은 포지션",
         "url": "diagnosis.html",
     },
     {
         "title": "Data Analyst Assistant",
         "company": "커머스 플랫폼",
-        "category": "ai",
+        "category": "unclassified",
         "location": "서울 · 신입",
         "deadline": "D-15",
         "fit": 86,
-        "skills": ["SQL", "Dashboard", "A/B Test"],
+        "skills": [],
         "reason": "정량 성과와 문제 정의 역량을 만들기 좋은 공고",
         "url": "diagnosis.html",
     },
     {
         "title": "Product Manager Intern",
         "company": "모바일 서비스 스타트업",
-        "category": "product",
+        "category": "unclassified",
         "location": "서울 · 인턴",
         "deadline": "D-7",
         "fit": 82,
-        "skills": ["UX Research", "기획", "데이터 해석"],
+        "skills": [],
         "reason": "대외활동·운영 경험을 프로덕트 언어로 바꾸기 좋음",
         "url": "diagnosis.html",
     },
     {
         "title": "Backend Developer Rookie",
         "company": "핀테크 플랫폼",
-        "category": "dev",
+        "category": "unclassified",
         "location": "서울 · 신입",
         "deadline": "D-18",
         "fit": 80,
-        "skills": ["API", "DB", "협업"],
+        "skills": [],
         "reason": "서버 프로젝트와 장애 해결 경험을 강조하기 좋은 공고",
         "url": "diagnosis.html",
     },
     {
         "title": "Growth Marketer Intern",
         "company": "에듀테크 기업",
-        "category": "product",
+        "category": "unclassified",
         "location": "원격 가능",
         "deadline": "D-21",
         "fit": 77,
-        "skills": ["콘텐츠", "실험", "분석"],
+        "skills": [],
         "reason": "캠페인·대외활동 경험을 수치 성과로 확장하기 좋음",
         "url": "diagnosis.html",
     },
@@ -111,34 +112,6 @@ def text_of(item, *names):
         if node is not None and node.text:
             return node.text.strip()
     return ""
-
-
-def infer_category(title):
-    lowered = title.lower()
-    if any(keyword in lowered for keyword in ["ai", "data", "데이터", "인공지능", "머신러닝", "분석"]):
-        return "ai"
-    if any(keyword in lowered for keyword in ["개발", "developer", "software", "backend", "frontend", "프론트", "백엔드"]):
-        return "dev"
-    if any(keyword in lowered for keyword in ["pm", "기획", "product", "서비스", "마케팅", "growth"]):
-        return "product"
-    return "all"
-
-
-def infer_skills(title):
-    lowered = title.lower()
-    skills = []
-    candidates = [
-        ("Python", ["python", "파이썬", "ai", "인공지능", "데이터"]),
-        ("SQL", ["sql", "데이터", "분석"]),
-        ("React", ["react", "프론트", "frontend"]),
-        ("API", ["api", "백엔드", "backend", "서버"]),
-        ("기획", ["기획", "pm", "product"]),
-        ("커뮤니케이션", ["운영", "관리", "마케팅", "영업"]),
-    ]
-    for label, keywords in candidates:
-        if any(keyword in lowered for keyword in keywords):
-            skills.append(label)
-    return skills[:3] or ["직무역량", "협업", "문제해결"]
 
 
 def normalize_deadline(close_date):
@@ -179,118 +152,8 @@ def read_url(url, timeout=6):
 
 
 def strip_tags(value):
-    return clean_text(re.sub(r"<[^>]+>", " ", value or ""))
-
-
-def search_public_web(query, limit=5):
-    """Small dependency-free web search helper used as the agents' search tool.
-
-    Runtime network may be unavailable in some local/dev environments, so callers
-    must treat an empty list as a safe, non-fatal result.
-    """
-    if not query:
-        return []
-    url = "https://duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
-    try:
-        html_text = read_url(url, timeout=4)
-    except Exception:
-        return []
-
-    results = []
-    seen_urls = set()
-    pattern = re.compile(
-        r'<a[^>]+class="result__a"[^>]+href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>.*?'
-        r'(?:<a[^>]+class="result__snippet"[^>]*>|<div[^>]+class="result__snippet"[^>]*>)(?P<snippet>.*?)</',
-        re.DOTALL | re.IGNORECASE,
-    )
-    for match in pattern.finditer(html_text):
-        href = html.unescape(match.group("href"))
-        parsed_href = urllib.parse.urlparse(href)
-        if "duckduckgo.com" in parsed_href.netloc and parsed_href.path.startswith("/l/"):
-            qs = urllib.parse.parse_qs(parsed_href.query)
-            href = qs.get("uddg", [href])[0]
-        if not href.startswith(("http://", "https://")) or href in seen_urls:
-            continue
-        seen_urls.add(href)
-        results.append(
-            {
-                "query": query,
-                "title": strip_tags(match.group("title")),
-                "url": href,
-                "snippet": strip_tags(match.group("snippet"))[:260],
-                "retrieved_at": time.strftime("%Y-%m-%d"),
-            }
-        )
-        if len(results) >= limit:
-            break
-    if results:
-        return results
-
-    fallback_pattern = re.compile(
-        r'<a[^>]+class="result__a"[^>]+href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>',
-        re.DOTALL | re.IGNORECASE,
-    )
-    for match in fallback_pattern.finditer(html_text):
-        href = html.unescape(match.group("href"))
-        parsed_href = urllib.parse.urlparse(href)
-        if "duckduckgo.com" in parsed_href.netloc and parsed_href.path.startswith("/l/"):
-            qs = urllib.parse.parse_qs(parsed_href.query)
-            href = qs.get("uddg", [href])[0]
-        if not href.startswith(("http://", "https://")) or href in seen_urls:
-            continue
-        seen_urls.add(href)
-        results.append(
-            {
-                "query": query,
-                "title": strip_tags(match.group("title")),
-                "url": href,
-                "snippet": "",
-                "retrieved_at": time.strftime("%Y-%m-%d"),
-            }
-        )
-        if len(results) >= limit:
-            break
-    return results
-
-
-def search_bing_web(query, limit=5):
-    if not query:
-        return []
-    url = "https://www.bing.com/search?" + urllib.parse.urlencode({"q": query})
-    try:
-        html_text = read_url(url, timeout=4)
-    except Exception:
-        return []
-    results = []
-    seen_urls = set()
-    pattern = re.compile(
-        r'<li[^>]+class="b_algo"[\s\S]*?<h2[^>]*>\s*<a[^>]+href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>[\s\S]*?(?:<p[^>]*>(?P<snippet>.*?)</p>)?',
-        re.IGNORECASE,
-    )
-    for match in pattern.finditer(html_text):
-        href = html.unescape(match.group("href"))
-        if not href.startswith(("http://", "https://")) or href in seen_urls:
-            continue
-        seen_urls.add(href)
-        results.append(
-            {
-                "query": query,
-                "title": strip_tags(match.group("title")),
-                "url": href,
-                "snippet": strip_tags(match.group("snippet") or "")[:260],
-                "retrieved_at": time.strftime("%Y-%m-%d"),
-            }
-        )
-        if len(results) >= limit:
-            break
-    return results
-
-
-def agent_web_search(query, limit=5):
-    results = search_public_web(query, limit=limit)
-    if results:
-        return results
-    return search_bing_web(query, limit=limit)
+    value = re.sub(r"<(script|style|svg|noscript)[^>]*>[\s\S]*?</\1>", " ", value or "", flags=re.IGNORECASE)
+    return clean_text(re.sub(r"<[^>]+>", " ", value))
 
 
 def write_debug_json(filename, payload):
@@ -300,34 +163,390 @@ def write_debug_json(filename, payload):
     return str(path)
 
 
-def build_success_case_queries(target_role):
-    role = clean_text(target_role) or "AI intern"
-    return [
-        f"{role} 합격 후기 포트폴리오 CV",
-        f"{role} 합격 사례 이력서 프로젝트",
-        f"{role} resume portfolio accepted example",
-        f"{role} intern interview success portfolio",
+def load_retrieval_source_registry():
+    try:
+        return json.loads(RETRIEVAL_SOURCE_REGISTRY_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {"source_registry": [], "priority_policy": {}}
+
+
+def extract_page_title(html_text):
+    match = re.search(r"<title[^>]*>(.*?)</title>", html_text or "", re.IGNORECASE | re.DOTALL)
+    return strip_tags(match.group(1)) if match else ""
+
+
+def extract_relevant_excerpt(html_text, keywords, limit=320):
+    text = strip_tags(html_text)
+    if not text:
+        return ""
+    lowered = text.lower()
+    normalized_keywords = [clean_text(keyword).lower() for keyword in keywords if clean_text(keyword)]
+    positions = [lowered.find(keyword) for keyword in normalized_keywords if lowered.find(keyword) >= 0]
+    if positions:
+        start = max(0, min(positions) - 80)
+        return text[start:start + limit]
+    return text[:limit]
+
+
+def extract_links_from_page(base_url, html_text, allowed_domains, keywords, limit=8):
+    links = []
+    seen = set()
+    for match in re.finditer(r'<a[^>]+href=["\'](?P<href>[^"\']+)["\'][^>]*>(?P<label>.*?)</a>', html_text or "", re.IGNORECASE | re.DOTALL):
+        href = absolute_url(base_url, match.group("href"))
+        href = href.split("#", 1)[0]
+        if not href.startswith(("http://", "https://")) or href in seen:
+            continue
+        if not url_in_allowed_domains(href, allowed_domains):
+            continue
+        label = strip_tags(match.group("label"))
+        haystack = f"{label} {href}".lower()
+        if keywords and not any(clean_text(keyword).lower() in haystack for keyword in keywords if clean_text(keyword)):
+            continue
+        seen.add(href)
+        links.append({"title": label or href, "url": href})
+        if len(links) >= limit:
+            break
+    return links
+
+
+def build_target_role_search_terms(target_role):
+    role = clean_text(target_role)
+    return [role] if role else []
+
+
+def read_registry_seed_candidates(source_entry, categories, assigned_gap, target_role, limit=6):
+    allowed_domains = source_entry.get("allowed_domains", [])
+    seed_urls = source_entry.get("seed_urls", []) or ([source_entry.get("homepage_url")] if source_entry.get("homepage_url") else [])
+    keywords = [
+        target_role,
+        *categories,
+        *summarize_text_items(assigned_gap, key="gap_name", limit=3),
+        "모집",
+        "채용",
+        "공고",
+        "접수",
+        "마감",
+        "자격요건",
+        "우대사항",
     ]
+    candidates = []
+    seen = set()
+    if source_entry.get("source_name") == "잡코리아" and target_role:
+        for search_term in build_target_role_search_terms(target_role):
+            try:
+                jobs = scrape_jobkorea_jobs(search_term, limit=limit)
+            except Exception:
+                jobs = []
+            for job in jobs:
+                if job.get("url") in seen:
+                    continue
+                seen.add(job.get("url"))
+                candidates.append(
+                    {
+                        "query": f"jobkorea_site_search:{search_term}",
+                        "title": job.get("title", ""),
+                        "url": job.get("url", ""),
+                        "snippet": strip_tags(job.get("reason", "")) or "잡코리아 자체 검색 결과에서 확인한 채용 상세 공고입니다.",
+                        "retrieved_at": time.strftime("%Y-%m-%d"),
+                    }
+                )
+                if len(candidates) >= limit:
+                    return candidates
+    for seed_url in seed_urls[:3]:
+        try:
+            html_text = read_url(seed_url, timeout=4)
+        except Exception:
+            continue
+        title = extract_page_title(html_text) or source_entry.get("source_name", "")
+        excerpt = extract_relevant_excerpt(html_text, keywords)
+        if seed_url not in seen:
+            seen.add(seed_url)
+            candidates.append(
+                {
+                    "query": "registry_seed_page",
+                    "title": title,
+                    "url": seed_url,
+                    "snippet": excerpt,
+                    "retrieved_at": time.strftime("%Y-%m-%d"),
+                }
+            )
+        for link in extract_links_from_page(seed_url, html_text, allowed_domains, keywords, limit=limit):
+            if link["url"] in seen:
+                continue
+            seen.add(link["url"])
+            link_title = link.get("title", "")
+            link_excerpt = excerpt
+            try:
+                link_html = read_url(link["url"], timeout=4)
+                link_title = extract_page_title(link_html) or link_title
+                link_excerpt = extract_relevant_excerpt(link_html, keywords)
+            except Exception:
+                pass
+            candidates.append(
+                {
+                    "query": "registry_seed_link",
+                    "title": link_title,
+                    "url": link.get("url", ""),
+                    "snippet": link_excerpt,
+                    "retrieved_at": time.strftime("%Y-%m-%d"),
+                }
+            )
+            if len(candidates) >= limit:
+                return candidates
+    return candidates
+
+
+def is_search_redirect_url(url):
+    parsed = urllib.parse.urlparse(url or "")
+    host = parsed.netloc.lower()
+    path = parsed.path.lower()
+    return (
+        "bing.com" in host and path.startswith("/ck/")
+    ) or (
+        "google." in host and path.startswith("/url")
+    )
+
+
+def url_in_allowed_domains(url, allowed_domains):
+    if not allowed_domains:
+        return True
+    host = urllib.parse.urlparse(url or "").netloc.lower()
+    return any(host == domain.lower() or host.endswith("." + domain.lower()) for domain in allowed_domains)
+
+
+def registry_source_categories():
+    categories = []
+    for entry in load_retrieval_source_registry().get("source_registry", []):
+        categories.extend(entry.get("source_category", []))
+    return list(dict.fromkeys(categories))
+
+
+def source_categories_from_consult_plan(assigned_gap):
+    selected = []
+    for gap in assigned_gap or []:
+        if not isinstance(gap, dict):
+            continue
+        for key in ("source_categories", "retrieval_source_categories", "source_category"):
+            value = gap.get(key)
+            if isinstance(value, list):
+                selected.extend(str(item) for item in value if item)
+            elif isinstance(value, str) and value:
+                selected.append(value)
+    known = set(registry_source_categories())
+    return [category for category in dict.fromkeys(selected) if category in known]
+
+
+def select_registry_entries(categories):
+    registry = load_retrieval_source_registry()
+    entries = registry.get("source_registry", [])
+    selected = []
+    for entry in entries:
+        entry_categories = set(entry.get("source_category", []))
+        if entry_categories.intersection(categories):
+            selected.append(entry)
+    return selected
+
+
+def is_landing_or_listing_candidate(result, source_entry):
+    url = result.get("url", "")
+    parsed = urllib.parse.urlparse(url)
+    path = parsed.path.rstrip("/").lower()
+    query = urllib.parse.parse_qs(parsed.query)
+    homepage = (source_entry.get("homepage_url") or "").rstrip("/")
+    if url.rstrip("/") == homepage:
+        return True
+    if result.get("query") == "registry_seed_page":
+        return True
+    if parsed.netloc.endswith("wevity.com") and query.get("c", [""])[0] == "find":
+        return True
+    if parsed.netloc.endswith("wevity.com") and query.get("c", [""])[0] == "event":
+        return True
+    if parsed.netloc.endswith("jobkorea.co.kr") and path.startswith("/theme/"):
+        return True
+    if parsed.netloc.endswith("thinkcontest.com") and path.endswith("/thinkgood/hindex.do"):
+        return True
+    if "search" in path or "calendar" in path:
+        return True
+    listing_markers = [
+        "/search",
+        "/recruit-home",
+        "/list",
+        "/calendar",
+        "/zf_user/search",
+        "/job_postings/search_guide",
+    ]
+    return any(path == marker or path.startswith(marker + "/") for marker in listing_markers)
+
+
+def build_retrieval_purpose_keywords(target_role="", categories=None, assigned_gap=None):
+    text = " ".join(
+        [
+            target_role or "",
+            " ".join(summarize_text_items(assigned_gap or [], key="gap_name", limit=3)),
+        ]
+    )
+    keywords = [token.lower() for token in re.findall(r"[A-Za-z가-힣0-9+#.]{2,}", text)]
+    return list(dict.fromkeys(keywords))
+
+
+def quality_gate_search_result(result, source_entry, seen_urls, purpose_keywords=None):
+    url = result.get("url", "")
+    title = result.get("title", "")
+    snippet = result.get("snippet", "")
+    allowed_domains = source_entry.get("allowed_domains", [])
+    landing_or_listing = is_landing_or_listing_candidate(result, source_entry)
+    haystack = f"{title} {snippet}".lower()
+    purpose_keywords = [keyword.lower() for keyword in (purpose_keywords or []) if keyword]
+    relevant_to_purpose = not purpose_keywords or any(keyword in haystack for keyword in purpose_keywords)
+    checks = {
+        "is_original_url": bool(url) and not is_search_redirect_url(url),
+        "is_allowed_domain": url_in_allowed_domains(url, allowed_domains),
+        "has_nonempty_snippet_or_excerpt": bool(snippet and len(snippet) >= 30),
+        "is_relevant_to_search_purpose": bool(title and (snippet or not landing_or_listing) and relevant_to_purpose),
+        "has_extractable_fields": bool(title and url),
+        "is_landing_or_listing_page": landing_or_listing,
+        "is_duplicate": url in seen_urls,
+        "is_login_or_paid_only": False,
+    }
+    keep = (
+        checks["is_original_url"]
+        and checks["is_allowed_domain"]
+        and checks["has_nonempty_snippet_or_excerpt"]
+        and checks["is_relevant_to_search_purpose"]
+        and checks["has_extractable_fields"]
+        and not checks["is_landing_or_listing_page"]
+        and not checks["is_duplicate"]
+        and not checks["is_login_or_paid_only"]
+    )
+    checks["decision"] = "keep" if keep else "needs_verification" if checks["is_landing_or_listing_page"] else "discard"
+    if not checks["is_original_url"]:
+        checks["reason"] = "검색 엔진 redirect URL입니다."
+    elif not checks["is_allowed_domain"]:
+        checks["reason"] = "source registry의 allowed_domains에 포함되지 않습니다."
+    elif checks["is_landing_or_listing_page"]:
+        checks["reason"] = "서비스 메인/목록/seed 페이지라 최종 추천 source로 확정하지 않았습니다."
+    elif checks["is_duplicate"]:
+        checks["reason"] = "중복 URL입니다."
+    elif not checks["has_nonempty_snippet_or_excerpt"]:
+        checks["reason"] = "원문에서 충분한 excerpt를 확인하지 못했습니다."
+    elif not checks["has_extractable_fields"]:
+        checks["reason"] = "제목 또는 URL 등 필수 필드를 확인하지 못했습니다."
+    elif not checks["is_relevant_to_search_purpose"]:
+        checks["reason"] = "target_role 또는 assigned_gap과 직접 관련된 근거를 확인하지 못했습니다."
+    else:
+        checks["reason"] = "source registry와 검색 목적 기준을 통과했습니다." if keep else "검색 목적과의 관련성이 부족합니다."
+    return checks
+
+
+def infer_used_for_from_categories(categories):
+    category_set = set(categories or [])
+    if category_set.intersection({"job_posting", "entry_level_job", "internship"}):
+        return "benchmark"
+    if category_set.intersection({"competition", "external_activity", "team_recruiting", "certificate_exam", "language_test"}):
+        return "recommendation"
+    if category_set.intersection({"company_info", "company_review", "salary_reference", "interview_reference"}):
+        return "company_reference"
+    if category_set.intersection({"test_schedule", "registration_period", "score_release_date"}):
+        return "exam_schedule"
+    return "recommendation"
+
+
+def build_verified_retrieval_sources(agent_key, preferences, assigned_gap):
+    target_role = preferences.get("target_role", "") if isinstance(preferences, dict) else ""
+    categories = source_categories_from_consult_plan(assigned_gap) or registry_source_categories()
+    entries = select_registry_entries(categories)
+    raw_candidates = []
+    verified_sources = []
+    discarded_sources = []
+    seen_urls = set()
+    for source_entry in entries[:4]:
+        source_categories = [category for category in source_entry.get("source_category", []) if category in categories] or source_entry.get("source_category", [])[:2]
+        purpose_keywords = build_retrieval_purpose_keywords(target_role, source_categories, assigned_gap)
+        seed_results = read_registry_seed_candidates(source_entry, source_categories, assigned_gap, target_role, limit=4)
+        for result in seed_results:
+            candidate = {
+                "source_name": source_entry.get("source_name", ""),
+                "title": result.get("title", ""),
+                "url": result.get("url", ""),
+                "query": result.get("query", "registry_seed_page"),
+                "snippet": result.get("snippet", ""),
+                "retrieved_at": result.get("retrieved_at", time.strftime("%Y-%m-%d")),
+            }
+            raw_candidates.append(candidate)
+            gate = quality_gate_search_result(result, source_entry, seen_urls, purpose_keywords=purpose_keywords)
+            if gate["decision"] == "keep":
+                seen_urls.add(result.get("url", ""))
+                related_gap = ", ".join(summarize_text_items(assigned_gap, key="gap_name", limit=2))
+                verified_sources.append(
+                    {
+                        "source_name": source_entry.get("source_name", ""),
+                        "source_category": source_categories[0] if source_categories else "",
+                        "title": result.get("title", ""),
+                        "url": result.get("url", ""),
+                        "retrieved_at": result.get("retrieved_at", time.strftime("%Y-%m-%d")),
+                        "extracted_fields": {
+                            "snippet": result.get("snippet", ""),
+                            "query": result.get("query", "registry_seed_page"),
+                        },
+                        "used_for": infer_used_for_from_categories(source_categories),
+                        "related_gap": related_gap,
+                        "status_note": "source registry seed page 또는 allowed domain retrieval 기준으로 1차 검증했습니다. 최종 지원 전 원문 페이지 확인이 필요합니다.",
+                        "source_quality_gate": gate,
+                    }
+                )
+            else:
+                discarded_sources.append(
+                    {
+                        "title": result.get("title", ""),
+                        "url": result.get("url", ""),
+                        "discard_reason": gate.get("reason", "source quality gate를 통과하지 못했습니다."),
+                        "source_quality_gate": gate,
+                    }
+                )
+            if len(verified_sources) >= SUPPORTING_SEARCH_LIMIT_PER_AGENT:
+                return {
+                    "raw_search_candidates": raw_candidates,
+                    "verified_sources": verified_sources,
+                    "discarded_sources": discarded_sources,
+                }
+    return {
+        "raw_search_candidates": raw_candidates,
+        "verified_sources": verified_sources,
+        "discarded_sources": discarded_sources,
+    }
 
 
 def collect_consulting_success_cases(target_role):
     cases = []
     seen_urls = set()
-    for query in build_success_case_queries(target_role)[:3]:
-        for result in agent_web_search(query, limit=4):
+    registry = load_retrieval_source_registry()
+    preferred_categories = {"career_community", "self_introduction_reference", "interview_reference", "company_review"}
+    entries = [
+        entry for entry in registry.get("source_registry", [])
+        if preferred_categories.intersection(set(entry.get("source_category", [])))
+    ]
+    for entry in entries:
+        source_categories = [category for category in entry.get("source_category", []) if category in preferred_categories]
+        purpose_keywords = build_retrieval_purpose_keywords(target_role, source_categories, [])
+        for result in read_registry_seed_candidates(entry, source_categories, [], target_role, limit=4):
             url = result.get("url", "")
             if not url or url in seen_urls:
+                continue
+            gate = quality_gate_search_result(result, entry, seen_urls, purpose_keywords=purpose_keywords)
+            if gate.get("decision") != "keep":
                 continue
             seen_urls.add(url)
             cases.append(
                 {
                     "source_type": "public_success_case_or_resume_reference",
+                    "source_name": entry.get("source_name", ""),
                     "title": result.get("title", ""),
                     "url": url,
                     "snippet": result.get("snippet", ""),
-                    "query": result.get("query", query),
+                    "query": result.get("query", "registry_seed_page"),
                     "retrieved_at": result.get("retrieved_at", time.strftime("%Y-%m-%d")),
-                    "note": "검색 결과에서 확인된 공개 합격 사례/이력서/포트폴리오 참고 후보입니다. 본문 검증 전에는 확정 사실로 사용하지 않습니다.",
+                    "source_quality_gate": gate,
+                    "note": "source registry의 커뮤니티/자기소개서/면접 참고 source에서 확인한 공개 참고 후보입니다. 본문 검증 전에는 확정 사실로 사용하지 않습니다.",
                 }
             )
             if len(cases) >= CONSULT_SUCCESS_CASE_LIMIT:
@@ -335,51 +554,8 @@ def collect_consulting_success_cases(target_role):
     return cases
 
 
-def build_supporting_search_queries(agent_key, target_role, assigned_gap):
-    role = clean_text(target_role) or "AI intern"
-    gap_terms = " ".join(summarize_text_items(assigned_gap, key="gap_name", limit=3))
-    if agent_key == "project_and_career":
-        return [
-            f"{role} project portfolio resume example {gap_terms}",
-            f"{role} 합격 포트폴리오 프로젝트 경험 {gap_terms}",
-            f"{role} internship project impact metrics resume",
-        ]
-    if agent_key == "leadership_and_contribution":
-        return [
-            f"{role} resume leadership teamwork contribution example",
-            f"{role} 합격 자기소개서 리더십 협업 경험",
-            f"{role} mentoring community volunteer resume example",
-        ]
-    if agent_key == "language_and_credential":
-        return [
-            f"{role} required skills certification language requirements",
-            f"{role} 자격증 어학 교육 이수 우대사항",
-            f"{role} resume skills certificate benchmark",
-        ]
-    return [
-        f"{role} ATS resume positioning example",
-        f"{role} CV positioning portfolio resume example",
-        f"{role} 합격 이력서 표현 포지셔닝",
-    ]
-
-
 def build_supporting_search_results(agent_key, preferences, assigned_gap):
-    results = []
-    seen_urls = set()
-    target_role = preferences.get("target_role", "") if isinstance(preferences, dict) else ""
-    for query in build_supporting_search_queries(agent_key, target_role, assigned_gap)[:2]:
-        for result in agent_web_search(query, limit=3):
-            url = result.get("url", "")
-            if not url or url in seen_urls:
-                continue
-            seen_urls.add(url)
-            item = dict(result)
-            item["source_type"] = "supporting_agent_web_search"
-            item["agent_key"] = agent_key
-            results.append(item)
-            if len(results) >= SUPPORTING_SEARCH_LIMIT_PER_AGENT:
-                return results
-    return results
+    return build_verified_retrieval_sources(agent_key, preferences, assigned_gap)
 
 
 def extract_deadline(text_block):
@@ -428,17 +604,16 @@ def extract_context(html_text, start, end):
 
 
 def build_web_job(title, company, url, source, rank, context=""):
-    category = infer_category(f"{title} {company} {context}")
     context_text = clean_text(context)
     summary = extract_summary(context, title, company)
     return {
         "title": title or "채용 공고",
         "company": company or source,
-        "category": category,
+        "category": "unclassified",
         "location": extract_location(context_text),
         "deadline": extract_deadline(context_text),
         "fit": max(72, 92 - rank * 3),
-        "skills": infer_skills(f"{title} {summary}"),
+        "skills": [],
         "reason": summary,
         "url": url,
         "source": source,
@@ -509,7 +684,7 @@ def scrape_saramin_jobs(keyword, limit):
         job["deadline"] = deadline
         job["location"] = location
         job["reason"] = summary
-        job["skills"] = infer_skills(f"{title} {sector_text}")
+        job["skills"] = []
         jobs.append(job)
         if len(jobs) >= limit:
             break
@@ -559,16 +734,14 @@ def normalize_work24_item(item):
     location = text_of(item, "region", "workRegion", "basicAddr", "workPlc") or "지역 미정"
     close_date = text_of(item, "closeDt", "receiptCloseDt", "pbancEndYmd")
     url = text_of(item, "wantedInfoUrl", "detailUrl", "url") or "diagnosis.html"
-    category = infer_category(f"{title} {company}")
-
     return {
         "title": title,
         "company": company,
-        "category": category,
+        "category": "unclassified",
         "location": location,
         "deadline": normalize_deadline(close_date),
-        "fit": 78 if category == "all" else 84,
-        "skills": infer_skills(title),
+        "fit": 78,
+        "skills": [],
         "reason": "현재 채용 시장에서 요구되는 역량을 CV와 비교해보기 좋은 공고",
         "url": url,
     }
@@ -629,49 +802,6 @@ def fetch_work24_jobs(limit):
     _cache[cache_key] = {"saved_at": time.time(), "jobs": jobs}
     return jobs[:limit]
 
-
-
-SKILL_KEYWORDS = {
-    "AI Research": ["artificial intelligence", "ai", "machine learning", "deep learning", "research"],
-    "Vision-Language Models": ["vision-language", "vision language", "vlm", "lvlm", "multimodal"],
-    "Computer Vision": ["computer vision", "perception", "segmentation", "3d", "bev"],
-    "Model Compression": ["pruning", "distillation", "efficient", "token pruning", "compression"],
-    "Python": ["python", "파이썬"],
-    "SQL": ["sql", "데이터베이스", "database"],
-    "React": ["react", "프론트엔드", "frontend"],
-    "TypeScript": ["typescript"],
-    "LLM": ["llm", "gpt", "agent", "rag", "에이전트", "생성형"],
-    "머신러닝": ["머신러닝", "machine learning", "ml", "모델"],
-    "딥러닝": ["딥러닝", "deep learning", "pytorch", "tensorflow"],
-    "Backend/API": ["api", "백엔드", "backend", "서버"],
-    "기획": ["기획", "pm", "product", "프로덕트"],
-    "UX": ["ux", "user experience", "사용자", "리서치"],
-    "Leadership": ["president", "leader", "leadership", "operating committee", "manager", "led", "운영", "리더"],
-    "Open Source": ["open-source", "open source", "opensource", "github", "오픈소스"],
-    "Hackathon": ["hackathon", "해커톤"],
-    "Publication": ["publication", "accepted", "conference", "paper", "manuscript", "proceedings", "논문"],
-}
-
-GAP_RECOMMENDATIONS = {
-    "AI Research": "지원 공고의 세부 분야와 가장 가까운 연구/프로젝트 2개를 상단에 배치하세요.",
-    "Vision-Language Models": "VLM 관련 성과를 모델, 벤치마크, 지표 중심으로 더 압축해 보여주세요.",
-    "Computer Vision": "CV/Perception 프로젝트의 데이터셋과 성능 개선 수치를 명확히 적으세요.",
-    "Model Compression": "pruning/distillation 성과를 latency, FLOPs, accuracy trade-off로 정리하세요.",
-    "Python": "Python 기반 재현 코드나 GitHub 링크를 함께 제시하세요.",
-    "SQL": "SQL 분석 과제나 대시보드 프로젝트로 데이터 근거를 보강하세요.",
-    "React": "React로 배포된 포트폴리오 프로젝트 링크를 추가하세요.",
-    "TypeScript": "TypeScript 리팩토링 경험을 README에 명확히 남기세요.",
-    "LLM": "LLM Agent/RAG 프로젝트에서 데이터, 평가, 실패 분석을 함께 보여주세요.",
-    "머신러닝": "모델 학습/평가 지표가 포함된 프로젝트를 추가하세요.",
-    "딥러닝": "PyTorch 기반 실험 로그와 결과 비교표를 CV에 연결하세요.",
-    "Backend/API": "API 설계/배포 경험을 보여주는 백엔드 프로젝트를 보강하세요.",
-    "기획": "문제정의-지표-실험 중심의 서비스 기획 사례를 정리하세요.",
-    "UX": "사용자 인터뷰나 UT 결과가 담긴 케이스 스터디를 추가하세요.",
-    "Leadership": "리더십 경험을 규모, 예산, 운영 성과 같은 수치로 표현하세요.",
-    "Open Source": "오픈소스 기여 링크와 본인의 contribution 범위를 명확히 적으세요.",
-    "Hackathon": "해커톤 결과물을 데모 링크나 수상/평가 기준과 함께 보여주세요.",
-    "Publication": "대표 논문 2~3개만 목표 직무와 연결해 요약하세요.",
-}
 
 
 def parse_multipart(body, content_type):
@@ -777,9 +907,7 @@ def extract_keyphrases(text, top_n=12):
             if size == 1 and len(phrase) <= 2:
                 continue
             length_bonus = 1 + (size - 1) * 0.55
-            technical_bonus = 2.2 if re.fullmatch(r"python|pytorch|llm|rag|agent|sql|react|typescript|머신러닝|딥러닝", phrase) else 1.45 if re.search(r"ai|llm|vlm|vision|language|model|token|pruning|distillation|python|pytorch|react|sql|agent|rag|multimodal|projector|perception|데이터|분석", phrase) else 1
-            metadata_penalty = 0.45 if re.search(r"university|conference|award|paper|kyuan|bumsoo|cuai|scholarship", phrase) else 1
-            scores[phrase] = scores.get(phrase, 0) + length_bonus * technical_bonus * metadata_penalty
+            scores[phrase] = scores.get(phrase, 0) + length_bonus
 
     ranked = sorted(scores.items(), key=lambda item: (item[1], len(item[0])), reverse=True)
     selected = []
@@ -864,11 +992,7 @@ def cosine_similarity(left, right):
 
 
 def extract_profile_skills(text):
-    skills = []
-    for skill, keywords in SKILL_KEYWORDS.items():
-        if any(keyword_matches(text, keyword) for keyword in keywords):
-            skills.append(skill)
-    return skills
+    return extract_keyphrases(text, top_n=8)
 
 
 def job_document(job):
@@ -930,36 +1054,14 @@ def rank_jobs_for_cv(cv_text, jobs, target_role):
 def build_cv_summary(cv_text, target_role):
     keyphrases = extract_keyphrases(cv_text, top_n=14)
     signals = evidence_signals(cv_text)
-    strengths = []
-    gaps = []
-
-    if keyphrases:
-        strengths.append(f"CV에서 자동 추출된 핵심 표현: {', '.join(keyphrases[:8])}")
-    if signals:
-        strengths.append(f"확인된 외부 증거: {', '.join(signals[:8])}")
-    if any("intern" in phrase or "research" in phrase for phrase in keyphrases) or "리서치 인턴" in signals:
-        strengths.append("연구/인턴 경험이 목표 직무와 연결될 수 있는 강한 근거입니다.")
-    if any(signal in signals for signal in ["논문/출판", "논문 accept", "학회"]):
-        strengths.append("논문·학회 실적이 있어 연구 역량을 외부 결과로 증명하고 있습니다.")
-    if any(signal in signals for signal in ["수상", "대회 수상", "해커톤", "리더보드 성과", "장학"]):
-        strengths.append("수상·대회·장학 성과가 있어 외부 검증 근거가 충분합니다.")
-
-    if not any(signal in signals for signal in ["GitHub", "오픈소스"]):
-        gaps.append("코드/GitHub/오픈소스 링크가 약하면 구현 역량 전달력이 떨어질 수 있습니다.")
-    if not any(phrase in " ".join(keyphrases) for phrase in ["benchmark", "accuracy", "latency", "performance", "evaluation"]):
-        gaps.append("성과를 benchmark, accuracy, latency, performance 같은 정량 표현으로 더 앞에 배치하면 좋습니다.")
-    if target_role and "intern" not in compact_text(cv_text) and "인턴" not in cv_text:
-        gaps.append("인턴 공고에 맞춰 실무 협업/팀 프로젝트 경험을 더 명확히 보여주세요.")
-    if len(cv_text) < 500:
-        gaps.append("CV 텍스트가 짧습니다. 성과 수치, 사용 기술, 결과 링크를 더 넣어야 정확도가 올라갑니다.")
 
     return {
         "targetRole": target_role or "목표 직무 미입력",
         "extractedCharacters": len(cv_text),
         "skills": keyphrases,
         "evidenceSignals": signals,
-        "strengths": strengths or ["목표 직무를 더 구체화하면 강점 포지셔닝이 선명해집니다."],
-        "gaps": gaps or ["외부 검증은 충분합니다. 이제 목표 공고별 요구 역량 순서에 맞춰 CV 문장을 재배치하세요."],
+        "strengths": [f"CV에서 자동 추출된 핵심 표현: {', '.join(keyphrases[:8])}"] if keyphrases else [],
+        "gaps": ["강점/보완점 판단은 Agent feedback loop에서 metadata와 retrieval source를 기준으로 산출합니다."],
     }
 
 
@@ -1178,7 +1280,7 @@ def build_llm_context(cv_text, summary, ranked_jobs, agent):
 
 def call_openai_llm_report(cv_text, summary, ranked_jobs, agent):
     if not OPENAI_API_KEY:
-        return None
+        raise ValueError("OPENAI_API_KEY가 필요합니다.")
 
     prompt_context = build_llm_context(cv_text, summary, ranked_jobs, agent)
     system_prompt = (
@@ -1201,75 +1303,59 @@ def call_openai_llm_report(cv_text, summary, ranked_jobs, agent):
         },
         "context": prompt_context,
     }
-    body = json.dumps(
-        {
-            "model": OPENAI_MODEL,
-            "input": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(user_prompt, ensure_ascii=False)},
-            ],
-            "max_output_tokens": 1800,
-        },
-        ensure_ascii=False,
-    ).encode("utf-8")
-    request = urllib.request.Request(
-        OPENAI_ENDPOINT,
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    return parse_json_object(response_output_text(payload))
+    return call_openai_json(system_prompt, user_prompt, max_output_tokens=2400, timeout=40)
+
+
+def build_deterministic_llm_report(summary, ranked_jobs, agent):
+    strengths = summary.get("strengths", []) if isinstance(summary, dict) else []
+    gaps = summary.get("gaps", []) if isinstance(summary, dict) else []
+    if isinstance(agent, dict):
+        strengths = strengths or agent.get("commonRequirements", [])[:4]
+        gaps = gaps or agent.get("quickActions", [])[:4]
+    job_notes = []
+    for job in (ranked_jobs or [])[:4]:
+        job_notes.append(
+            {
+                "title": job.get("title", "추천 공고"),
+                "fitReason": "; ".join(job.get("fitReasons", [])[:2]) or job.get("reason", "metadata와 공고 키워드의 겹치는 지점을 기준으로 추천되었습니다."),
+                "risk": "; ".join(job.get("gaps", [])[:2]) or "역할, 산출물, 정량 성과 근거를 더 보강하면 안정성이 올라갑니다.",
+            }
+        )
+    return {
+        "headline": "현재 metadata 기준으로 커리어 fit 리포트를 구성했습니다.",
+        "cvSummary": summary.get("summary", "입력된 CV metadata와 추천 공고를 기준으로 강점과 보완점을 정리했습니다.") if isinstance(summary, dict) else "입력된 CV metadata와 추천 공고를 기준으로 강점과 보완점을 정리했습니다.",
+        "strengths": strengths[:5] or ["CV에서 확인되는 경험을 기준으로 직무 연관 신호를 정리할 수 있습니다."],
+        "evidenceGaps": gaps[:5] or ["역할, 산출물, 정량 성과, 사용 기술의 근거를 더 명확히 적으면 좋습니다."],
+        "jobFitNotes": job_notes,
+        "recommendedActions": [
+            {
+                "title": "프로젝트별 역할·산출물·성과 보강",
+                "why": "단순 참여보다 본인이 만든 결과와 영향을 더 명확히 보여주는 것이 중요합니다.",
+                "timeEstimate": "1~2일",
+            },
+            {
+                "title": "목표 직무 한 줄 포지셔닝 정리",
+                "why": "AI 개발, 서비스기획, AX 컨설팅 중 우선 방향이 명확해야 CV 전체 문장이 흔들리지 않습니다.",
+                "timeEstimate": "30분~1시간",
+            },
+        ],
+        "weeklyPlan": [
+            "1주차: metadata에서 근거가 약한 항목을 프로젝트별로 재작성합니다.",
+            "2주차: 목표 공고 5~10개와 표현을 대조해 핵심 키워드를 반영합니다.",
+        ],
+        "profileUpdatePrompt": "CV 상단 요약에는 목표 직무, 대표 프로젝트, 사용 기술, 확인 가능한 성과를 한 문단으로 연결해 적어주세요.",
+        "fallback": True,
+    }
 
 
 def safe_llm_report(cv_text, summary, ranked_jobs, agent):
     try:
-        return call_openai_llm_report(cv_text, summary, ranked_jobs, agent)
-    except Exception as exc:
-        strengths = summary.get("strengths", []) if isinstance(summary, dict) else []
-        gaps = summary.get("gaps", []) if isinstance(summary, dict) else []
-        if isinstance(agent, dict):
-            strengths = strengths or agent.get("commonRequirements", [])[:4]
-            gaps = gaps or agent.get("quickActions", [])[:4]
-        job_notes = []
-        for job in (ranked_jobs or [])[:4]:
-            job_notes.append(
-                {
-                    "title": job.get("title", "추천 공고"),
-                    "fitReason": "; ".join(job.get("fitReasons", [])[:2]) or job.get("reason", "metadata와 공고 키워드의 겹치는 지점을 기준으로 추천되었습니다."),
-                    "risk": "; ".join(job.get("gaps", [])[:2]) or "역할, 산출물, 정량 성과 근거를 더 보강하면 안정성이 올라갑니다.",
-                }
-            )
-        return {
-            "headline": "현재 metadata 기준으로 보수적인 커리어 fit 리포트를 구성했습니다.",
-            "cvSummary": summary.get("summary", "입력된 CV metadata와 추천 공고를 기준으로 강점과 보완점을 정리했습니다.") if isinstance(summary, dict) else "입력된 CV metadata와 추천 공고를 기준으로 강점과 보완점을 정리했습니다.",
-            "strengths": strengths[:5] or ["CV에서 확인되는 경험을 기준으로 직무 연관 신호를 정리할 수 있습니다."],
-            "evidenceGaps": gaps[:5] or ["역할, 산출물, 정량 성과, 사용 기술의 근거를 더 명확히 적으면 좋습니다."],
-            "jobFitNotes": job_notes,
-            "recommendedActions": [
-                {
-                    "title": "프로젝트별 역할·산출물·성과 보강",
-                    "why": "합격 사례와 공고는 단순 참여보다 본인이 만든 결과와 영향을 더 강하게 봅니다.",
-                    "timeEstimate": "1~2일",
-                },
-                {
-                    "title": "목표 직무 한 줄 포지셔닝 정리",
-                    "why": "AI 개발, 서비스기획, AX 컨설팅 중 우선 방향이 명확해야 CV 전체 문장이 흔들리지 않습니다.",
-                    "timeEstimate": "30분~1시간",
-                },
-            ],
-            "weeklyPlan": [
-                "1주차: metadata에서 근거가 약한 항목을 프로젝트별로 재작성합니다.",
-                "2주차: 목표 공고 5~10개와 표현을 대조해 핵심 키워드를 반영합니다.",
-            ],
-            "profileUpdatePrompt": "리포트 생성이 일시적으로 실패해도 분석 화면이 끊기지 않도록 서버가 보수적인 기본 리포트를 구성했습니다.",
-            "fallback": True,
-            "fallbackReason": clean_text(str(exc))[:180],
-        }
+        report = call_openai_llm_report(cv_text, summary, ranked_jobs, agent)
+        if isinstance(report, dict) and not report.get("error"):
+            return report
+    except Exception:
+        pass
+    return build_deterministic_llm_report(summary, ranked_jobs, agent)
 
 
 SUPPORTING_AGENT_CONFIG = {
@@ -1455,8 +1541,9 @@ def build_retrieval_context(ranked_jobs, target_role):
         "benchmark_sources": benchmark_sources,
         "success_case_sources": success_cases,
         "recommendation_sources": success_cases,
+        "source_registry": load_retrieval_source_registry().get("source_registry", []),
         "debug_success_cases_path": debug_path,
-        "retrieval_policy": "consult_retrieval_plus_supporting_search",
+        "retrieval_policy": "consulting_source_registry_quality_gate",
         "retrieved_at": retrieved_at,
     }
 
@@ -1591,7 +1678,7 @@ def call_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_contex
         + RETRIEVAL_ONLY_PROMPT
         + "\n\n"
         "목표 직무 benchmark를 만들고, 어떤 Supporting Agent를 호출할지 보수적으로 선택해주세요. "
-        "제공된 retrieval_context와 metadata를 기준으로 삼고, Supporting Agent가 추가 검색 결과를 받으면 그 결과를 검토 단계에서 함께 평가해주세요. "
+        "제공된 retrieval_context, retrieval_source_registry, metadata를 기준으로 삼고, Supporting Agent에는 검증된 retrieved_sources만 전달된다는 전제로 계획해주세요. "
         "Return JSON only."
     )
     user_prompt = {
@@ -1599,6 +1686,7 @@ def call_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_contex
         "preferences": preferences,
         "ranked_job_candidates": job_context_for_feedback(ranked_jobs),
         "retrieval_context": retrieval_context,
+        "retrieval_source_registry": load_retrieval_source_registry(),
         "available_supporting_agents": [
             {"key": key, "name": config["name"], "metadata_scope": config["metadata_keys"]}
             for key, config in SUPPORTING_AGENT_CONFIG.items()
@@ -1627,6 +1715,7 @@ def call_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_contex
                     "metadata_evidence": "string",
                     "missing_or_weak_point": "string",
                     "recommended_source_policy": "string",
+                    "source_categories": ["source_category from retrieval_source_registry"],
                     "assigned_agent": "project_and_career | leadership_and_contribution | language_and_credential | cv_positioning",
                 }
             ],
@@ -1663,6 +1752,7 @@ def call_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_contex
         "benchmark": result.get("benchmark", {}),
         "gap_analysis": result.get("gap_analysis", []),
         "retrieved_sources": result.get("retrieved_sources", retrieval_context),
+        "retrieval_source_registry": load_retrieval_source_registry(),
         "activated_agents": activated,
         "conversation_log": normalize_conversation_log(result.get("conversation_log", [])),
     }
@@ -1680,6 +1770,7 @@ def fallback_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_co
             "metadata_evidence": "metadata의 projects_and_experience, awards, skills를 확인해야 합니다.",
             "missing_or_weak_point": "역할, 산출물, 성과가 충분히 구조화되어 있는지 보수적으로 확인해야 합니다.",
             "recommended_source_policy": "상위 공고 benchmark source와 연결해 경험의 근거를 검토합니다.",
+            "source_categories": ["job_posting", "internship", "competition", "external_activity"],
             "assigned_agent": "project_and_career",
         },
         {
@@ -1688,6 +1779,7 @@ def fallback_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_co
             "metadata_evidence": "전체 metadata와 cv_text를 확인해야 합니다.",
             "missing_or_weak_point": "목표 직무 기준으로 어떤 경험을 앞세울지 검토해야 합니다.",
             "recommended_source_policy": "상위 공고의 반복 키워드와 rejection risk를 기준으로 표현을 점검합니다.",
+            "source_categories": ["job_posting", "company_info", "self_introduction_reference"],
             "assigned_agent": "cv_positioning",
         },
     ]
@@ -1716,6 +1808,7 @@ def fallback_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_co
         },
         "gap_analysis": gap_analysis,
         "retrieved_sources": retrieval_context,
+        "retrieval_source_registry": load_retrieval_source_registry(),
         "activated_agents": activated_agents,
         "conversation_log": [
             {
@@ -1727,7 +1820,7 @@ def fallback_consult_agent_plan(metadata, preferences, ranked_jobs, retrieval_co
     }
 
 
-def call_supporting_agent(agent_key, metadata, preferences, benchmark, cv_text, retrieval_context, assigned_gap, internet_search_results=None):
+def call_supporting_agent(agent_key, metadata, preferences, benchmark, cv_text, retrieval_context, assigned_gap, agent_retrieval_results=None):
     config = SUPPORTING_AGENT_CONFIG[agent_key]
     agent_prompt = load_agent_prompt(config["prompt_file"])
     scoped_metadata = select_metadata_for_agent(metadata, config["metadata_keys"])
@@ -1746,8 +1839,11 @@ def call_supporting_agent(agent_key, metadata, preferences, benchmark, cv_text, 
         "additional_user_input": preferences.get("additional_user_input", ""),
         "benchmark": scoped_benchmark,
         "metadata_subset": scoped_metadata,
-        "retrieved_sources": select_retrieved_sources_for_agent(agent_key, retrieval_context, benchmark),
-        "internet_search_results": internet_search_results or [],
+        "retrieved_sources": (agent_retrieval_results or {}).get("verified_sources", []),
+        "retrieval_audit": {
+            "raw_search_candidate_count": len((agent_retrieval_results or {}).get("raw_search_candidates", [])),
+            "discarded_source_count": len((agent_retrieval_results or {}).get("discarded_sources", [])),
+        },
         "assigned_gap": assigned_gap,
         "cv_text": compact_for_prompt(cv_text, 6500) if agent_key == "cv_positioning" else "",
         "required_output_format": {
@@ -1821,7 +1917,7 @@ def fallback_supporting_review(agent_key, exc):
     }
 
 
-def call_supporting_agent_revision(agent_key, metadata, preferences, benchmark, cv_text, original_review, revision_request, retrieval_context, assigned_gap, internet_search_results=None):
+def call_supporting_agent_revision(agent_key, metadata, preferences, benchmark, cv_text, original_review, revision_request, retrieval_context, assigned_gap, agent_retrieval_results=None):
     config = SUPPORTING_AGENT_CONFIG[agent_key]
     agent_prompt = load_agent_prompt(config["prompt_file"])
     scoped_metadata = select_metadata_for_agent(metadata, config["metadata_keys"])
@@ -1841,8 +1937,11 @@ def call_supporting_agent_revision(agent_key, metadata, preferences, benchmark, 
         "preparation_period": preferences.get("preparation_period", ""),
         "benchmark": scoped_benchmark,
         "metadata_subset": scoped_metadata,
-        "retrieved_sources": select_retrieved_sources_for_agent(agent_key, retrieval_context, benchmark),
-        "internet_search_results": internet_search_results or [],
+        "retrieved_sources": (agent_retrieval_results or {}).get("verified_sources", []),
+        "retrieval_audit": {
+            "raw_search_candidate_count": len((agent_retrieval_results or {}).get("raw_search_candidates", [])),
+            "discarded_source_count": len((agent_retrieval_results or {}).get("discarded_sources", [])),
+        },
         "assigned_gap": assigned_gap,
         "cv_text": compact_for_prompt(cv_text, 6500) if agent_key == "cv_positioning" else "",
         "required_output_format": {
@@ -1901,7 +2000,7 @@ def call_consult_agent_review(metadata, preferences, ranked_jobs, plan, supporti
         "gap_analysis": plan.get("gap_analysis", []),
         "activated_agents": plan.get("activated_agents", []),
         "supporting_reviews": supporting_reviews,
-        "supporting_search_results": supporting_search_results or {},
+        "supporting_retrieval_results": supporting_search_results or {},
         "prior_consult_review": prior_review or {},
         "allow_revision_requests": allow_revisions,
         "review_rules": [
@@ -1916,7 +2015,7 @@ def call_consult_agent_review(metadata, preferences, ranked_jobs, plan, supporti
             "allow_revision_requests가 true이면 필요한 재검토 요청을 revision_requests에 남겨주세요.",
             "allow_revision_requests가 false이면 추가 재검토를 요청하지 말고 최종 통합만 해주세요.",
             "각 Supporting Agent에게 검토 완료 또는 재검토 요청 메시지를 conversation_log에 남겨주세요.",
-            "Supporting Agent가 사용한 internet_search_results가 metadata 사실과 섞이지 않았는지 확인해주세요.",
+            "Supporting Agent가 사용한 verified_sources가 metadata 사실과 섞이지 않았는지 확인해주세요.",
         ],
         "output_schema": {
             "agent_reviews": {},
@@ -2149,10 +2248,11 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
     emit_event("status", {"message": "선택된 Supporting Agent들이 병렬로 1차 검토를 시작했습니다."})
     for item in plan["activated_agents"]:
         scoped_metadata = select_metadata_for_agent(metadata, SUPPORTING_AGENT_CONFIG[item["agent_key"]]["metadata_keys"])
-        scoped_sources = select_retrieved_sources_for_agent(item["agent_key"], retrieval_context, plan["benchmark"])
         scoped_gaps = assigned_gaps_for_agent(item["agent_key"], plan.get("gap_analysis", []))
-        internet_results = build_supporting_search_results(item["agent_key"], preferences, scoped_gaps)
-        supporting_search_results[item["agent_key"]] = internet_results
+        retrieval_results = build_supporting_search_results(item["agent_key"], preferences, scoped_gaps)
+        supporting_search_results[item["agent_key"]] = retrieval_results
+        verified_sources = retrieval_results.get("verified_sources", [])
+        discarded_sources = retrieval_results.get("discarded_sources", [])
         handoff_message = {
             "from": "Consult Agent",
             "to": item["agent_name"],
@@ -2162,14 +2262,14 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
                 f"- metadata scope: {metadata_scope_summary(scoped_metadata)}\n"
                 f"- assigned_gap: {', '.join(summarize_text_items(scoped_gaps, key='gap_name', limit=4)) or '없음'}\n"
                 f"- benchmark: {', '.join(summarize_text_items(select_benchmark_for_agent(plan['benchmark'], SUPPORTING_AGENT_CONFIG[item['agent_key']]['benchmark_keys']).get('core_requirements', []), limit=3)) or '없음'}\n"
-                f"- retrieved_sources: {retrieval_counts(scoped_sources)}\n"
-                f"- internet_search_results: {len(internet_results)}개 ({', '.join(summarize_text_items(internet_results, key='title', limit=2)) or '검색 결과 없음'})"
+                f"- verified_sources: {len(verified_sources)}개 ({', '.join(summarize_text_items(verified_sources, key='title', limit=2)) or '검증 통과 source 없음'})\n"
+                f"- discarded_sources: {len(discarded_sources)}개"
             ),
         }
         conversation_log.append(handoff_message)
         emit_event("conversation", handoff_message)
     write_debug_json(
-        "supporting_agent_search_results.json",
+        "supporting_agent_retrieval_audit.json",
         {
             "target_role": preferences.get("target_role", ""),
             "retrieved_at": time.strftime("%Y-%m-%d"),
@@ -2347,9 +2447,9 @@ def build_feedback_loop(cv_text, metadata, preferences, ranked_jobs, emit=None):
 
     return {
         "mode": "multi_call",
-        "retrievalPolicy": "consult_retrieval_plus_supporting_search",
+        "retrievalPolicy": "consulting_source_registry_quality_gate",
         "retrievedSources": retrieval_context,
-        "supportingSearchResults": supporting_search_results,
+        "supportingRetrievalResults": supporting_search_results,
         "benchmark": plan.get("benchmark", {}),
         "gapAnalysis": plan.get("gap_analysis", []),
         "activatedAgents": plan.get("activated_agents", []),
@@ -2848,9 +2948,9 @@ class HICareerHandler(SimpleHTTPRequestHandler):
                 fallback_consult = fallback_consult_agent_review(metadata, preferences, fallback_plan, {}, allow_revisions=False)
                 feedback_loop = {
                     "mode": "fallback",
-                    "retrievalPolicy": "consult_retrieval_plus_supporting_search",
+                    "retrievalPolicy": "consulting_source_registry_quality_gate",
                     "retrievedSources": fallback_plan.get("retrieved_sources", {}),
-                    "supportingSearchResults": {},
+                    "supportingRetrievalResults": {},
                     "benchmark": fallback_plan.get("benchmark", {}),
                     "gapAnalysis": fallback_plan.get("gap_analysis", []),
                     "activatedAgents": fallback_plan.get("activated_agents", []),
