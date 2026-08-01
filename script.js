@@ -51,6 +51,104 @@ function renderMessage(label, title, items = []) {
   `;
 }
 
+function getCompletedActions() {
+  try {
+    return JSON.parse(localStorage.getItem("hicareer-completed-actions")) || {};
+  } catch {
+    return {};
+  }
+}
+
+function setCompletedAction(id, done) {
+  const completed = getCompletedActions();
+  completed[id] = done;
+  localStorage.setItem("hicareer-completed-actions", JSON.stringify(completed));
+}
+
+function renderList(items) {
+  return items?.length ? `<ul>${items.map((item) => `<li>${item}</li>`).join("")}</ul>` : "";
+}
+
+function renderAgent(agent) {
+  if (!agent) return "";
+  const completed = getCompletedActions();
+  return `
+    <div class="agent-section">
+      <div class="agent-header">
+        <span class="result-label">Agent Execution</span>
+        <h4>HICAREER Agent가 실행한 단계</h4>
+      </div>
+      <div class="agent-trace">
+        ${agent.trace
+          .map(
+            (step) => `
+              <article>
+                <span>${step.step}</span>
+                <strong>${step.label}</strong>
+                <p>${step.detail}</p>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="agent-grid">
+        <article>
+          <h4>공통 요구 표현</h4>
+          <div class="skill-row">${agent.commonRequirements.map((item) => `<span>${item}</span>`).join("")}</div>
+        </article>
+        <article>
+          <h4>증거 gap</h4>
+          ${renderList(agent.evidenceGaps)}
+        </article>
+      </div>
+      <div class="opportunity-list">
+        <h4>gap을 채울 추천 활동</h4>
+        ${agent.opportunities
+          .map(
+            (item) => `
+              <article class="opportunity-mini-card">
+                <div class="job-card-top">
+                  <span class="fit high">Fit ${item.fit}</span>
+                  <span class="deadline">${item.deadline}</span>
+                </div>
+                <strong>${item.title}</strong>
+                <p>${item.why}</p>
+                <small>${item.source} · 예상 ${item.duration}</small>
+                <a href="${item.url}" target="_blank" rel="noopener noreferrer">확인하기</a>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="weekly-plan">
+        <h4>이번 주 액션</h4>
+        ${agent.weeklyPlan
+          .map(
+            (action) => `
+              <label class="action-check">
+                <input type="checkbox" data-action-id="${action.id}" ${completed[action.id] ? "checked" : ""} />
+                <span>
+                  <strong>${action.title}</strong>
+                  <small>${action.source} · ${action.duration}</small>
+                  <em>${action.reason}</em>
+                </span>
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function bindActionChecks() {
+  document.querySelectorAll("[data-action-id]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      setCompletedAction(checkbox.dataset.actionId, checkbox.checked);
+    });
+  });
+}
+
 function renderLoading() {
   resultCard.innerHTML = `
     <span class="result-label">분석 중</span>
@@ -93,7 +191,9 @@ function renderAnalysis(data) {
       <h4>보완할 증거</h4>
       <ul>${summary.gaps.map((item) => `<li>${item}</li>`).join("")}</ul>
     </div>
+    ${renderAgent(data.agent)}
     <div class="ranked-jobs">
+      <h4>추천 채용공고 ranking</h4>
       ${rankedJobs
         .map(
           (job, index) => `
@@ -118,6 +218,7 @@ function renderAnalysis(data) {
         .join("")}
     </div>
   `;
+  bindActionChecks();
 }
 
 async function analyzePdf() {

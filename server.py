@@ -563,7 +563,8 @@ STOPWORDS = {
     "kyuan", "oh", "kyuanoh", "chung", "ang", "university", "cau", "cuai", "seoul", "korea", "bumsoo", "kim",
     "award", "paper", "summer", "winter", "conference", "proceedings", "equal", "contribution", "correspondingauthor",
     "under", "review", "submitted", "proceedingsofthe", "th",
-    "서울", "경력무관", "학력무관", "대졸", "계약직", "인턴직", "정규직", "등록일", "수정일", "채용", "공고",
+    "서울", "경기", "강남구", "영등포구", "성남시", "분당구", "경력무관", "학력무관", "대졸", "계약직", "인턴직", "정규직", "등록일", "수정일", "채용", "공고",
+    "시스템통합", "솔루션업체", "전자상거래", "데이터마이닝", "데이터시각화", "앱개발",
 }
 
 PHRASE_ALIASES = {
@@ -617,12 +618,18 @@ def extract_keyphrases(text, top_n=12):
             parts = phrase.split()
             if any(part in STOPWORDS for part in parts):
                 continue
+            if re.search(r"시스템통합|솔루션업체|전자상거래|영등포구|강남구|성남시|분당구", phrase):
+                continue
+            if "java" in parts and "python" in parts:
+                continue
+            if "si" in parts:
+                continue
             if len(set(parts)) < len(parts):
                 continue
             if size == 1 and len(phrase) <= 2:
                 continue
             length_bonus = 1 + (size - 1) * 0.55
-            technical_bonus = 1.45 if re.search(r"ai|llm|vlm|vision|language|model|token|pruning|distillation|python|pytorch|react|sql|agent|rag|multimodal|projector|perception|데이터|분석", phrase) else 1
+            technical_bonus = 2.2 if re.fullmatch(r"python|pytorch|llm|rag|agent|sql|react|typescript|머신러닝|딥러닝", phrase) else 1.45 if re.search(r"ai|llm|vlm|vision|language|model|token|pruning|distillation|python|pytorch|react|sql|agent|rag|multimodal|projector|perception|데이터|분석", phrase) else 1
             metadata_penalty = 0.45 if re.search(r"university|conference|award|paper|kyuan|bumsoo|cuai|scholarship", phrase) else 1
             scores[phrase] = scores.get(phrase, 0) + length_bonus * technical_bonus * metadata_penalty
 
@@ -811,6 +818,157 @@ def build_cv_summary(cv_text, target_role):
 def count_keyword_hits(text, keywords):
     return sum(1 for keyword in keywords if keyword_matches(text, keyword))
 
+OPPORTUNITY_LIBRARY = [
+    {
+        "title": "AI 해커톤 또는 공모전 참가",
+        "source": "링커리어/위비티 검색 추천",
+        "category": "hackathon",
+        "duration": "1~3주",
+        "deadline": "현재 모집 확인",
+        "covers": ["agent", "ai", "python", "model", "evaluation", "hackathon", "공모전"],
+        "impact": "외부 검증과 팀 협업 증거를 빠르게 만들 수 있습니다.",
+        "url": "https://linkareer.com/list/contest",
+    },
+    {
+        "title": "오픈소스 PR 1개 만들기",
+        "source": "GitHub",
+        "category": "opensource",
+        "duration": "3~7일",
+        "deadline": "상시",
+        "covers": ["github", "open-source", "code", "python", "api", "react"],
+        "impact": "코드 구현력과 외부 협업 증거를 동시에 보강합니다.",
+        "url": "https://github.com/explore",
+    },
+    {
+        "title": "RAG/Agent 미니 프로젝트 배포",
+        "source": "개인 프로젝트",
+        "category": "project",
+        "duration": "1~2주",
+        "deadline": "상시",
+        "covers": ["llm", "agent", "rag", "api", "deployment", "evaluation"],
+        "impact": "AI 인턴 공고에서 자주 요구되는 실전 구현 증거를 만들 수 있습니다.",
+        "url": "plan.html",
+    },
+    {
+        "title": "Kaggle/데이콘 데이터 분석 제출",
+        "source": "데이콘/Kaggle",
+        "category": "data",
+        "duration": "1~3주",
+        "deadline": "현재 대회 확인",
+        "covers": ["data", "sql", "python", "benchmark", "performance", "analysis"],
+        "impact": "정량 지표와 리더보드 성과를 CV에 추가하기 좋습니다.",
+        "url": "https://dacon.io/competitions",
+    },
+    {
+        "title": "직무 연계 봉사/멘토링 활동",
+        "source": "1365/VMS",
+        "category": "service",
+        "duration": "주 2~4시간",
+        "deadline": "현재 모집 확인",
+        "covers": ["leadership", "communication", "education", "mentoring", "community"],
+        "impact": "조직 기여와 커뮤니케이션 증거가 부족할 때만 추천합니다.",
+        "url": "https://www.1365.go.kr/vols/main.do",
+    },
+]
+
+
+def common_job_requirements(ranked_jobs, top_n=10):
+    scores = {}
+    for job in ranked_jobs[:8]:
+        document = job_document(job)
+        for phrase in extract_keyphrases(document, top_n=10):
+            scores[phrase] = scores.get(phrase, 0) + 1 + job.get("fit", 0) / 100
+    return [phrase for phrase, _ in sorted(scores.items(), key=lambda item: item[1], reverse=True)[:top_n]]
+
+
+def detect_evidence_gaps(cv_phrases, common_requirements, evidence):
+    matched = overlap_phrases(cv_phrases, common_requirements)
+    gaps = [requirement for requirement in common_requirements if requirement not in matched]
+    evidence_gap = []
+    if not any(signal in evidence for signal in ["GitHub", "오픈소스"]):
+        evidence_gap.append("코드/오픈소스 증거")
+    if not any(signal in evidence for signal in ["리더보드 성과", "수상", "대회 수상"]):
+        evidence_gap.append("외부 평가 성과")
+    return matched, list(dict.fromkeys([*gaps[:6], *evidence_gap]))
+
+
+def score_opportunity(opportunity, gaps, target_role):
+    gap_text = " ".join(gaps).lower()
+    role_text = target_role.lower()
+    coverage = sum(1 for token in opportunity["covers"] if token.lower() in gap_text or token.lower() in role_text)
+    urgency = 8 if opportunity["deadline"] != "상시" else 5
+    effort = {"3~7일": 9, "1~2주": 8, "1~3주": 7, "주 2~4시간": 6}.get(opportunity["duration"], 6)
+    score = min(98, 58 + coverage * 10 + urgency + effort)
+    return score
+
+
+def recommend_opportunities(gaps, target_role):
+    ranked = []
+    for opportunity in OPPORTUNITY_LIBRARY:
+        item = dict(opportunity)
+        item["fit"] = score_opportunity(opportunity, gaps, target_role)
+        item["why"] = f"보완할 증거 `{gaps[0] if gaps else '직무 적합 증거'}`와 연결됩니다. {opportunity['impact']}"
+        ranked.append(item)
+    return sorted(ranked, key=lambda item: item["fit"], reverse=True)[:4]
+
+
+def build_weekly_plan(opportunities, gaps):
+    primary = opportunities[:2]
+    actions = []
+    for index, opportunity in enumerate(primary, start=1):
+        actions.append(
+            {
+                "id": f"week-action-{index}",
+                "title": opportunity["title"],
+                "source": opportunity["source"],
+                "duration": opportunity["duration"],
+                "reason": opportunity["why"],
+                "done": False,
+            }
+        )
+    actions.append(
+        {
+            "id": "cv-update",
+            "title": "CV 상단 3줄을 목표 공고 언어로 재작성",
+            "source": "HICAREER",
+            "duration": "30분",
+            "reason": f"가장 큰 gap인 `{gaps[0] if gaps else '핵심 요구역량'}`를 먼저 보이게 만듭니다.",
+            "done": False,
+        }
+    )
+    return actions
+
+
+def build_agent_trace(cv_text, target_role, jobs, ranked_jobs, common_requirements, gaps, opportunities):
+    return [
+        {"step": "CV_READ", "label": "CV PDF/입력 텍스트에서 핵심 증거 추출", "detail": f"{len(cv_text)}자 분석 완료"},
+        {"step": "JOB_SEARCH", "label": "목표 직무 채용공고 검색", "detail": f"{target_role or DEFAULT_JOB_KEYWORD} 기준 {len(jobs)}개 후보 수집"},
+        {"step": "RETRIEVAL", "label": "CV와 공고 문서 embedding-style ranking", "detail": f"상위 공고: {ranked_jobs[0]['title'] if ranked_jobs else '없음'}"},
+        {"step": "REQUIREMENTS", "label": "상위 공고의 공통 요구 표현 추출", "detail": ", ".join(common_requirements[:4])},
+        {"step": "GAP", "label": "CV에 부족한 증거 gap 탐지", "detail": ", ".join(gaps[:4]) if gaps else "큰 gap 없음"},
+        {"step": "ACTION", "label": "gap을 채울 활동과 이번 주 액션 생성", "detail": f"활동 {len(opportunities)}개 추천"},
+    ]
+
+
+def build_agent_result(cv_text, target_role, jobs, ranked_jobs):
+    cv_phrases = extract_keyphrases(cv_text, top_n=18)
+    evidence = evidence_signals(cv_text)
+    requirements = common_job_requirements(ranked_jobs)
+    matched, gaps = detect_evidence_gaps(cv_phrases, requirements, evidence)
+    opportunities = recommend_opportunities(gaps, target_role)
+    weekly_plan = build_weekly_plan(opportunities, gaps)
+    trace = build_agent_trace(cv_text, target_role, jobs, ranked_jobs, requirements, gaps, opportunities)
+    return {
+        "trace": trace,
+        "cvKeyphrases": cv_phrases,
+        "commonRequirements": requirements,
+        "matchedEvidence": matched,
+        "evidenceGaps": gaps,
+        "opportunities": opportunities,
+        "weeklyPlan": weekly_plan,
+    }
+
+
 
 def parse_analyze_request(headers, body):
     content_type = headers.get("Content-Type", "")
@@ -883,24 +1041,28 @@ class HICareerHandler(SimpleHTTPRequestHandler):
             keyword = target_role or " ".join(extract_profile_skills(cv_text)[:3]) or DEFAULT_JOB_KEYWORD
             jobs = fetch_popular_jobs(10, keyword)
             ranked_jobs = rank_jobs_for_cv(cv_text, jobs, target_role)
+            agent = build_agent_result(cv_text, target_role, jobs, ranked_jobs)
             self.send_json(
                 {
                     "source": "pdf" if filename else "manual",
                     "filename": filename,
                     "summary": build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta},
                     "rankedJobs": ranked_jobs[:6],
+                    "agent": agent,
                 }
             )
         except (json.JSONDecodeError, ValueError):
             self.send_json({"error": "요청 형식이 올바르지 않습니다.", "rankedJobs": []}, status=400)
         except (urllib.error.URLError, TimeoutError, ElementTree.ParseError):
             ranked_jobs = rank_jobs_for_cv(cv_text, FALLBACK_JOBS, target_role)
+            agent = build_agent_result(cv_text, target_role, FALLBACK_JOBS, ranked_jobs)
             self.send_json(
                 {
                     "source": "fallback",
                     "filename": filename,
                     "summary": build_cv_summary(cv_text, target_role) | {"pdf": pdf_meta},
                     "rankedJobs": ranked_jobs[:6],
+                    "agent": agent,
                 }
             )
 
